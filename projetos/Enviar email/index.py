@@ -1,19 +1,18 @@
 import io
-import os
 import logging
 import smtplib
-import imghdr
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 from email.utils import parseaddr
+from html import escape
 
 import pandas as pd
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.responses import HTMLResponse
-from html import escape
 
 app = FastAPI()
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
