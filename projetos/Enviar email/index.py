@@ -1,3 +1,13 @@
+
+from fastapi import FastAPI, File, Form, UploadFile
+from fastapi.responses import HTMLResponse
+
+app = FastAPI()
+
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return "<h1>Robô de Envio de E-mails</h1>"
+
 import io
 import logging
 import smtplib
@@ -8,10 +18,7 @@ from email.utils import parseaddr
 from html import escape
 
 import pandas as pd
-from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import HTMLResponse
 
-app = FastAPI()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
