@@ -12,7 +12,7 @@ app = FastAPI()
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-  return """
+    return """
     <!DOCTYPE html>
     <html lang="pt-br">
     <head>
@@ -88,60 +88,60 @@ async def enviar_emails(
     subject: str = Form(...),
     body_html: str = Form(...),
 ):
-  try:
-    contents_excel = await excel_file.read()
-    df = pd.read_excel(contents_excel)
+    try:
+        contents_excel = await excel_file.read()
+        df = pd.read_excel(contents_excel)
 
-    if "Email" not in df.columns:
-      return """
+        if "Email" not in df.columns:
+            return """
             <h3>❌ Erro: A planilha precisa possuir uma coluna chamada 'Email'.</h3>
             <br><a href="/">Voltar</a>
             """
 
-    recipients = df["Email"].dropna().tolist()
+        recipients = df["Email"].dropna().tolist()
 
-    contents_image = await image_file.read()
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp:
-      temp.write(contents_image)
-      image_path = temp.name
+        contents_image = await image_file.read()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as temp:
+            temp.write(contents_image)
+            image_path = temp.name
 
-    server = smtplib.SMTP("smtp.gmail.com", 587)
-    server.starttls()
-    server.login(sender_email, sender_password)
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(sender_email, sender_password)
 
-    enviados = 0
-    for recipient in recipients:
-      try:
-        msg = MIMEMultipart("related")
-        msg["From"] = sender_email
-        msg["To"] = recipient
-        msg["Subject"] = subject
+        enviados = 0
+        for recipient in recipients:
+            try:
+                msg = MIMEMultipart("related")
+                msg["From"] = sender_email
+                msg["To"] = recipient
+                msg["Subject"] = subject
 
-        body = MIMEMultipart("alternative")
-        body.attach(MIMEText(body_html, "html", "utf-8"))
-        msg.attach(body)
+                body = MIMEMultipart("alternative")
+                body.attach(MIMEText(body_html, "html", "utf-8"))
+                msg.attach(body)
 
-        with open(image_path, "rb") as f:
-          img = MIMEImage(f.read())
-          img.add_header("Content-ID", "<image1>")
-          img.add_header(
-              "Content-Disposition", "inline", filename="imagem.jpg"
-          )
-          msg.attach(img)
+                with open(image_path, "rb") as f:
+                    img = MIMEImage(f.read())
+                    img.add_header("Content-ID", "<image1>")
+                    img.add_header(
+                        "Content-Disposition", "inline", filename="imagem.jpg"
+                    )
+                    msg.attach(img)
 
-        server.sendmail(sender_email, recipient, msg.as_string())
-        enviados += 1
-      except Exception:
-        pass
+                server.sendmail(sender_email, recipient, msg.as_string())
+                enviados += 1
+            except Exception:
+                pass
 
-    server.quit()
+        server.quit()
 
-    return f"""
+        return f"""
         <h3>✅ {enviados} de {len(recipients)} e-mails enviados com sucesso!</h3>
         <br><a href="/">Voltar</a>
         """
-  except Exception as e:
-    return f"""
+    except Exception as e:
+        return f"""
         <h3>❌ Erro ao processar: {str(e)}</h3>
         <br><a href="/">Voltar</a>
         """
