@@ -449,21 +449,22 @@ def verificar_correspondencia(termo, rotulo):
     if not termo_normalizado or not rotulo_normalizado:
         return False
 
+    # Correspondência exata
     if termo_normalizado == rotulo_normalizado:
+        return True
+
+    # Se o termo buscado está contido dentro do rótulo da IA (ex: "cat" dentro de "egyptian cat" ou "tiger cat")
+    if termo_normalizado in rotulo_normalizado:
         return True
 
     palavras_termo = set(termo_normalizado.split())
     palavras_rotulo = set(rotulo_normalizado.split())
 
-    # Evita correspondências frágeis com palavras muito curtas.
-    if len(palavras_termo) == 1:
-        palavra = next(iter(palavras_termo))
+    # Se houver interseção direta de palavras maiores
+    if palavras_termo.intersection(palavras_rotulo):
+        return True
 
-        if len(palavra) < 4:
-            return False
-
-    return bool(palavras_termo.intersection(palavras_rotulo))
-
+    return False
 
 # =========================================================
 # AJUSTE HEURÍSTICO COM FEEDBACK
