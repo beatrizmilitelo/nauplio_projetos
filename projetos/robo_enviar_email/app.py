@@ -6,22 +6,30 @@ from email.mime.text import MIMEText
 from email.mime.image import MIMEImage
 
 def send_bulk_email_with_embedded_image(sender_email, sender_password, df, subject, body_html, image_file):
-    # Pega todos os valores da primeira coluna (índice 0) como lista
     recipients = df.iloc[:, 0].dropna().astype(str).tolist()
     
+    # Identifica o servidor SMTP correto com base no domínio do e-mail
+    sender_email_lower = sender_email.strip().lower()
+    if "gmail.com" in sender_email_lower:
+        smtp_server = "smtp.gmail.com"
+        smtp_port = 587
+    elif "outlook" in sender_email_lower or "hotmail" in sender_email_lower or "live" in sender_email_lower or "office365" in sender_email_lower:
+        smtp_server = "smtp.office365.com"
+        smtp_port = 587
+    else:
+        return False, "Domínio de e-mail não reconhecido automaticamente. Use um e-mail do Gmail ou Outlook/Hotmail."
+
     try:
-        # Configuração do servidor SMTP (Outlook / Office365)
-        server = smtplib.SMTP('smtp.office365.com', 587)
+        server = smtplib.SMTP(smtp_server, smtp_port)
         server.starttls()
         server.login(sender_email, sender_password)
     except Exception as e:
-        return False, f"Erro ao conectar ao servidor SMTP: {e}"
+        return False, f"Erro ao conectar ou autenticar no servidor SMTP: {e}"
 
     progress_bar = st.progress(0)
     total = len(recipients)
 
     for i, recipient in enumerate(recipients):
-        # Ignora se por acaso a linha estiver vazia ou não parecer um e-mail
         if "@" not in recipient:
             continue
             
@@ -35,7 +43,6 @@ def send_bulk_email_with_embedded_image(sender_email, sender_password, df, subje
             body.attach(MIMEText(body_html, 'html'))
             msg.attach(body)
 
-            # Processa os bytes da imagem enviada pelo upload do Streamlit
             image_bytes = image_file.getvalue()
             img = MIMEImage(image_bytes)
             img.add_header('Content-ID', '<image1>')
@@ -50,43 +57,37 @@ def send_bulk_email_with_embedded_image(sender_email, sender_password, df, subje
     server.quit()
     return True, "E-mails enviados com sucesso!"
 
-# Configuração da página
 st.set_page_config(page_title="Disparador de E-mails", page_icon="📧", layout="centered")
 
 st.title("📧 Disparador de E-mails em Massa")
-st.markdown("Envie campanhas personalizadas com imagens embutidas usando sua conta do Outlook/Office365.")
+st.markdown("Envie campanhas personalizadas com imagens embutidas usando contas do **Outlook** ou **Gmail**.")
 
-# Formulário de credenciais
 st.subheader("1. Credenciais e Configurações")
 col1, col2 = st.columns(2)
 with col1:
-    sender_email = st.text_input("E-mail do Remetente", placeholder="seu-email@outlook.com")
+    sender_email = st.text_input("E-mail do Remetente", placeholder="seu-email@gmail.com ou @outlook.com")
 with col2:
-    sender_password = st.text_input("Senha ou App Password", type="password")
+    sender_password = st.text_input("Senha ou Senha de App", type="password")
     
 subject = st.text_input("Assunto do E-mail", value="Campanha Promocional")
 
-# Upload de arquivos e orientações
 st.subheader("2. Arquivos (Planilha e Imagem)")
 uploaded_excel = st.file_uploader("Envie a planilha (Excel .xlsx)", type=["xlsx"])
 
-# Instruções claras sobre a planilha sem cabeçalho
 st.info("""
 📌 **Como montar sua planilha Excel (.xlsx):**
 - A planilha deve conter **apenas uma coluna** com os e-mails.
 - **Não coloque cabeçalho** (comece a colocar os e-mails direto na primeira linha da primeira coluna).
-- Exemplo de como deve ficar:
+- Exemplo:
   
   | Coluna A |
   | :--- |
   | cliente1@exemplo.com |
   | cliente2@exemplo.com |
-  | cliente3@exemplo.com |
 """)
 
 uploaded_image = st.file_uploader("Envie a imagem para o corpo do e-mail", type=["png", "jpg", "jpeg"])
 
-# Corpo do e-mail em HTML
 st.subheader("3. Corpo do E-mail (HTML)")
 default_html = """<html>
   <body>
@@ -98,7 +99,6 @@ default_html = """<html>
 </html>"""
 body_html = st.text_area("Código HTML do E-mail", value=default_html, height=150)
 
-# Botão de envio
 if st.button("🚀 Enviar E-mails", type="primary"):
     if not sender_email or not sender_password:
         st.error("Por favor, preencha o e-mail e a senha do remetente.")
@@ -107,7 +107,6 @@ if st.button("🚀 Enviar E-mails", type="primary"):
     elif not uploaded_image:
         st.error("Por favor, envie a imagem.")
     else:
-        # header=None avisa o pandas que a planilha NÃO tem cabeçalho
         df = pd.read_excel(uploaded_excel, header=None)
         with st.spinner("Enviando e-mails, por favor aguarde..."):
             success, message = send_bulk_email_with_embedded_image(
