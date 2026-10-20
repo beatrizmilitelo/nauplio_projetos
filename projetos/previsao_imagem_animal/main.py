@@ -35,7 +35,7 @@ def resetar_metricas():
     st.session_state.erros = 0
 
 # ---------------------------------------------------------
-# Função de Tradução Direta (Português para Inglês)
+# Função de Tradução Direta (PT -> EN) Sem Lista Fixa
 # ---------------------------------------------------------
 def traduzir_pt_para_en(texto: str) -> str:
     texto_limpo = texto.strip().lower()
@@ -45,7 +45,14 @@ def traduzir_pt_para_en(texto: str) -> str:
         # Força a tradução estritamente do português para o inglês
         traducao = GoogleTranslator(source='pt', target='en').translate(texto_limpo)
         if traducao:
-            return traducao.lower().strip()
+            traducao_limpa = traducao.lower().strip()
+            # Se por acaso a API devolver a mesma palavra (como acontece com 'gato'), 
+            # tentamos forçar uma tradução geral sem restrição de origem
+            if traducao_limpa == texto_limpo:
+                traducao_geral = GoogleTranslator(source='auto', target='en').translate(texto_limpo)
+                if traducao_geral and traducao_geral.lower().strip() != texto_limpo:
+                    return traducao_geral.lower().strip()
+            return traducao_limpa
     except Exception:
         pass
     return texto_limpo
@@ -109,7 +116,7 @@ if uploaded_file is not None:
     if not alvo_usuario:
         st.warning("⚠️ Por favor, digite o que quer que a IA reconheça no campo acima e pressione Enter.")
     else:
-        # Traduz automaticamente do português para o inglês
+        # Traduz automaticamente do português para o inglês sem lista
         termo_ingles = traduzir_pt_para_en(alvo_usuario)
         alvo_lower = alvo_usuario.lower().strip()
         
@@ -131,12 +138,12 @@ if uploaded_file is not None:
             label_pt = traduzir_para_portugues(label_lower)
             previsoes_traduzidas.append((label_lower, label_pt, prob))
 
-            # Verifica correspondências
+            # Verifica correspondências cruzadas (inglês ou português)
             if (termo_ingles in label_lower) or (label_lower in termo_ingles) or (alvo_lower in label_pt):
                 encontrou = True
 
         if encontrou:
-            st.success(f"🤖 Palpite da IA: **Encontrei '{alvo_usuario}' (como '{termo_ingles}') na imagem!** ✅")
+            st.success(f"🤖 Palpite da IA: **Encontrei '{alvo_usuario}' (traduzido para '{termo_ingles}') na imagem!** ✅")
         else:
             st.error(f"🤖 Palpite da IA: **Não consegui identificar '{alvo_usuario}' com segurança.** ❌")
 
