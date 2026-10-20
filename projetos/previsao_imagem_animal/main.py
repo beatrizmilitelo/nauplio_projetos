@@ -1,12 +1,14 @@
 
+import hashlib
+import json
 import os
 import re
-import json
-import hashlib
+import tempfile
 import unicodedata
+from pathlib import Path
 
-import streamlit as st
 import numpy as np
+import streamlit as st
 from PIL import Image
 from deep_translator import GoogleTranslator, MyMemoryTranslator
 from tensorflow.keras.applications.mobilenet_v2 import (
@@ -14,681 +16,673 @@ from tensorflow.keras.applications.mobilenet_v2 import (
     preprocess_input,
     decode_predictions,
 )
-from tensorflow.keras.preprocessing import image as keras_image
 
 
 # =========================================================
-# 1. CONFIGURAÇÕES
+# CONFIGURAÇÕES
 # =========================================================
 
 st.set_page_config(
-    page_title="Detector Universal por IA",
+    page_title="Detector Universal de Imagens com IA",
     page_icon="🤖",
     layout="centered",
 )
 
-ARQUIVO_METRICAS = "metricas_ia.json"
-ARQUIVO_FEEDBACK = "feedback_ia.json"
+PASTA = Path(__file__).resolve().parent
 
-st.title("Detector Universal de Imagens com IA 🤖")
+ARQUIVO_METRICAS = PASTA / "metricas_ia.json"
+ARQUIVO_FEEDBACK = PASTA / "feedback_ia.json"
+ARQUIVO_AVALIACOES = PASTA / "avaliacoes_registradas.json"
 
-st.write(
-    "Digite o nome de um animal ou objeto, envie uma imagem "
-    "e avalie o resultado da inteligência artificial."
-)
+METRICAS_INICIAIS = {
+    "total": 0,
+    "acertos": 0,
+    "erros": 0,
+}
+
+IDIOMAS = {
+    "Detectar automaticamente": "auto",
+    "Português (Brasil)": "pt-BR",
+    "Inglês": "en",
+    "Espanhol": "es",
+    "Francês": "fr",
+    "Alemão": "de",
+    "Italiano": "it",
+    "Japonês": "ja",
+    "Chinês simplificado": "zh-CN",
+    "Russo": "ru",
+    "Árabe": "ar",
+    "Hindi": "hi",
+}
 
 
 # =========================================================
-# 2. FUNÇÕES DE PERSISTÊNCIA
+# LEITURA E GRAVAÇÃO DE JSON
 # =========================================================
+
+def ler_json(caminho, valor_padrao):
+    try:
+        if caminho.exists():
+            with open(caminho, "r", encoding="utf-8") as arquivo:
+                return json.load(arquivo)
+    except (OSError, json.JSONDecodeError):
+        pass
+
+    return valor_padrao.copy() if isinstance(valor_padrao, dict) else valor_padrao
+
 
 def salvar_json(caminho, dados):
-    """Salva os dados em JSON usando arquivo temporário."""
-    temporario = caminho + ".tmp"
+    """
+    Salva o arquivo de forma segura para reduzir o risco
+    de corromper os dados caso a gravação seja interrompida.
+    """
+    temporario = None
 
-    with open(temporario, "w", encoding="utf-8") as arquivo:
-        json.dump(
-            dados,
-            arquivo,
-            ensure_ascii=False,
-            indent=2,
-        )
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=PASTA,
+            delete=False,
+            suffix=".tmp",
+        ) as arquivo:
+            json.dump(
+                dados,
+                arquivo,
+                ensure_ascii=False,
+                indent=2,
+            )
+            temporario = arquivo.name
 
-    os.replace(temporario, caminho)
+        os.replace(temporario, caminho)
+        return True
+
+    except OSError:
+        if temporario and os.path.exists(temporario):
+            try:
+                os.remove(temporario)
+            except OSError:
+                pass
+
+        return False
 
 
 def carregar_metricas():
-    """Recupera as métricas acumuladas entre sessões."""
-    padrao = {
-        "total_rodadas": 0,
-        "acertos": 0,
-        "erros": 0,
-    }
-
-    if not os.path.exists(ARQUIVO_METRICAS):
-        return padrao
+    dados = ler_json(ARQUIVO_METRICAS, METRICAS_INICIAIS)
 
     try:
-        with open(ARQUIVO_METRICAS, "r", encoding="utf-8") as arquivo:
-            dados = json.load(arquivo)
-
-        metricas = {
-            "total_rodadas": max(0, int(dados.get("total_rodadas", 0))),
-            "acertos": max(0, int(dados.get("acertos", 0))),
-            "erros": max(0, int(dados.get("erros", 0))),
+        return {
+            "total": int(dados.get("total", 0)),
+            "acertos": int(dados.get("acertos", 0)),
+            "erros": int(dados.get("erros", 0)),
         }
-
-        # Garante consistência com os totais salvos.
-        if metricas["total_rodadas"] != (
-            metricas["acertos"] + metricas["erros"]
-        ):
-            metricas["total_rodadas"] = (
-                metricas["acertos"] + metricas["erros"]
-            )
-
-        return metricas
-
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        st.warning(
-            "Não foi possível ler o arquivo das métricas. "
-            "Verifique o arquivo metricas_ia.json."
-        )
-        return padrao
-
-
-def salvar_metricas():
-    """Persiste os contadores após cada avaliação."""
-    dados = {
-        "total_rodadas": st.session_state.total_rodadas,
-        "acertos": st.session_state.acertos,
-        "erros": st.session_state.erros,
-    }
-
-    salvar_json(ARQUIVO_METRICAS, dados)
-
-
-def carregar_feedback():
-    """Carrega o histórico de aprendizado por termo."""
-    if not os.path.exists(ARQUIVO_FEEDBACK):
-        return {}
-
-    try:
-        with open(ARQUIVO_FEEDBACK, "r", encoding="utf-8") as arquivo:
-            dados = json.load(arquivo)
-
-        return dados if isinstance(dados, dict) else {}
-
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        st.warning(
-            "Não foi possível ler o histórico de feedback."
-        )
-        return {}
+    except (ValueError, TypeError):
+        return METRICAS_INICIAIS.copy()
 
 
 # =========================================================
-# 3. INICIALIZAÇÃO DA SESSÃO
-# =========================================================
-
-if "metricas_carregadas" not in st.session_state:
-    metricas = carregar_metricas()
-
-    st.session_state.total_rodadas = metricas["total_rodadas"]
-    st.session_state.acertos = metricas["acertos"]
-    st.session_state.erros = metricas["erros"]
-
-    st.session_state.metricas_carregadas = True
-
-if "ultima_avaliacao" not in st.session_state:
-    st.session_state.ultima_avaliacao = None
-
-if "resultado_atual" not in st.session_state:
-    st.session_state.resultado_atual = None
-
-
-# =========================================================
-# 4. NORMALIZAÇÃO DE TEXTO
+# TRADUÇÃO
 # =========================================================
 
 def normalizar(texto):
     texto = str(texto).lower().strip()
-
     texto = unicodedata.normalize("NFKD", texto)
     texto = "".join(
         caractere
         for caractere in texto
         if not unicodedata.combining(caractere)
     )
-
-    texto = texto.replace("_", " ")
-    texto = re.sub(r"[^\w\s-]", " ", texto)
-
-    return re.sub(r"\s+", " ", texto).strip()
+    texto = re.sub(r"[_\-]+", " ", texto)
+    texto = re.sub(r"[^a-z0-9 ]", " ", texto)
+    return " ".join(texto.split())
 
 
-# =========================================================
-# 5. TRADUÇÃO PARA INGLÊS
-# =========================================================
+@st.cache_data(ttl=86400, show_spinner=False)
+def traduzir_para_ingles(texto, idioma_origem):
+    """
+    Tenta traduzir usando Google e, se falhar,
+    tenta MyMemory.
 
-def traduzir_para_ingles(texto):
+    As traduções bem-sucedidas ficam em cache por 24 horas.
+    """
+
     texto = texto.strip()
 
     if not texto:
-        raise ValueError(
-            "Digite o nome do animal ou objeto."
-        )
+        raise ValueError("Digite o nome de um animal ou objeto.")
+
+    if idioma_origem == "auto":
+        origem_google = "auto"
+        origem_mymemory = "pt-BR"
+    else:
+        origem_google = idioma_origem
+        origem_mymemory = idioma_origem
 
     erros = []
 
-    # Primeira tentativa: detectar qualquer idioma.
+    # Primeira tentativa: Google
     try:
         resultado = GoogleTranslator(
-            source="auto",
+            source=origem_google,
             target="en",
         ).translate(texto)
 
         if resultado and resultado.strip():
-            return resultado.strip().lower()
+            return resultado.strip()
 
     except Exception as erro:
-        erros.append(f"Google automático: {erro}")
+        erros.append(f"Google: {str(erro)[:250]}")
 
-    # Segunda tentativa: português para inglês.
-    try:
-        resultado = GoogleTranslator(
-            source="pt",
-            target="en",
-        ).translate(texto)
-
-        if resultado and resultado.strip():
-            return resultado.strip().lower()
-
-    except Exception as erro:
-        erros.append(f"Google PT-EN: {erro}")
-
-    # Terceira tentativa: serviço alternativo.
-    # Essa alternativa considera o texto em português.
+    # Segunda tentativa: MyMemory
     try:
         resultado = MyMemoryTranslator(
-            source="pt",
-            target="en",
+            source=origem_mymemory,
+            target="en-GB",
         ).translate(texto)
 
         if resultado and resultado.strip():
-            return resultado.strip().lower()
+            return resultado.strip()
 
     except Exception as erro:
-        erros.append(f"MyMemory PT-EN: {erro}")
-
-    detalhes = "\n".join(erros)
+        erros.append(f"MyMemory: {str(erro)[:250]}")
 
     raise RuntimeError(
-        "Não foi possível traduzir o texto.\n\n"
-        "Verifique se o ambiente tem acesso à internet. "
-        "Se estiver hospedado, o servidor pode estar bloqueando "
-        "as requisições aos serviços de tradução.\n\n"
-        f"Detalhes técnicos:\n{detalhes}"
+        "Não foi possível traduzir o texto neste momento. "
+        "O serviço pode estar temporariamente indisponível. "
+        "Aguarde alguns minutos e tente novamente. "
+        + " | ".join(erros)
     )
 
 
-def traduzir_para_portugues(texto):
-    """Tradução opcional para exibir as previsões."""
-    try:
-        resultado = GoogleTranslator(
-            source="en",
-            target="pt",
-        ).translate(texto)
-
-        return resultado.lower().strip() if resultado else texto
-
-    except Exception:
-        return texto
-
-
 # =========================================================
-# 6. CARREGAR MODELO DE IA
+# MODELO DE INTELIGÊNCIA ARTIFICIAL
 # =========================================================
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Carregando modelo de inteligência artificial...")
 def carregar_modelo():
     return MobileNetV2(weights="imagenet")
 
 
-with st.spinner("Carregando o modelo de inteligência artificial..."):
-    model = carregar_modelo()
+# =========================================================
+# ANÁLISE DE IMAGEM
+# =========================================================
+
+def preparar_imagem(arquivo):
+    imagem = Image.open(arquivo).convert("RGB")
+    imagem_redimensionada = imagem.resize((224, 224))
+
+    array = np.asarray(imagem_redimensionada, dtype=np.float32)
+    array = np.expand_dims(array, axis=0)
+    array = preprocess_input(array)
+
+    return imagem, array
+
+
+def pontuar_previsoes(previsoes, termo, feedback):
+    """
+    Ajusta heuristicamente as pontuações com base no feedback anterior.
+    Isso não altera nem retreina os pesos do MobileNetV2.
+    """
+
+    termo_normalizado = normalizar(termo)
+    dados_termo = feedback.get(termo_normalizado, {})
+
+    positivos = dados_termo.get("positivos", {})
+    negativos = dados_termo.get("negativos", {})
+
+    resultado = []
+
+    for rotulo, confianca in previsoes:
+        rotulo_normalizado = normalizar(rotulo)
+
+        pontos_positivos = int(positivos.get(rotulo_normalizado, 0))
+        pontos_negativos = int(negativos.get(rotulo_normalizado, 0))
+
+        # Ajuste limitado para que o feedback não domine a previsão.
+        ajuste = min(pontos_positivos, 5) * 0.02
+        ajuste -= min(pontos_negativos, 5) * 0.02
+
+        nova_confianca = max(
+            0.0,
+            min(1.0, confianca + ajuste),
+        )
+
+        resultado.append(
+            {
+                "rotulo": rotulo,
+                "confianca": confianca,
+                "pontuacao_ajustada": nova_confianca,
+            }
+        )
+
+    resultado.sort(
+        key=lambda item: item["pontuacao_ajustada"],
+        reverse=True,
+    )
+
+    return resultado
+
+
+def verificar_correspondencia(termo, rotulo):
+    """
+    Comparação textual simples entre o termo traduzido
+    e o rótulo produzido pelo modelo.
+    """
+
+    termo_normalizado = normalizar(termo)
+    rotulo_normalizado = normalizar(rotulo)
+
+    if not termo_normalizado or not rotulo_normalizado:
+        return False
+
+    palavras_termo = set(termo_normalizado.split())
+    palavras_rotulo = set(rotulo_normalizado.split())
+
+    if termo_normalizado == rotulo_normalizado:
+        return True
+
+    # Evita aceitar palavras muito curtas como correspondência.
+    if len(termo_normalizado) >= 4:
+        if termo_normalizado in rotulo_normalizado:
+            return True
+
+    return bool(palavras_termo.intersection(palavras_rotulo))
+
+
+def criar_chave_avaliacao(texto_original, idioma, bytes_imagem):
+    """
+    A mesma combinação de texto, idioma e imagem gera a mesma chave.
+    Isso ajuda a impedir que uma avaliação já registrada conte novamente.
+    """
+
+    hash_imagem = hashlib.sha256(bytes_imagem).hexdigest()
+
+    identificador = (
+        normalizar(texto_original)
+        + "|"
+        + idioma
+        + "|"
+        + hash_imagem
+    )
+
+    return hashlib.sha256(
+        identificador.encode("utf-8")
+    ).hexdigest()
 
 
 # =========================================================
-# 7. REGISTRAR AVALIAÇÕES
+# REGISTRO DO FEEDBACK E MÉTRICAS
 # =========================================================
 
-def registrar_resultado(correto):
-    """Cada avaliação confirmada é contabilizada e salva."""
-    st.session_state.total_rodadas += 1
+def registrar_feedback(chave, termo, previsoes, acertou):
+    metricas = carregar_metricas()
+    avaliacoes = ler_json(ARQUIVO_AVALIACOES, {})
+    feedback = ler_json(ARQUIVO_FEEDBACK, {})
 
-    if correto:
-        st.session_state.acertos += 1
+    # Não contabiliza novamente uma avaliação já respondida.
+    if chave in avaliacoes:
+        return False, "Esta avaliação já foi registrada anteriormente."
+
+    termo_normalizado = normalizar(termo)
+
+    if termo_normalizado not in feedback:
+        feedback[termo_normalizado] = {
+            "positivos": {},
+            "negativos": {},
+        }
+
+    dados_termo = feedback[termo_normalizado]
+
+    if acertou:
+        metricas["acertos"] += 1
+
+        # Reforça o rótulo que apareceu primeiro na previsão.
+        rotulo = normalizar(previsoes[0]["rotulo"])
+        positivos = dados_termo["positivos"]
+        positivos[rotulo] = int(positivos.get(rotulo, 0)) + 1
+
     else:
-        st.session_state.erros += 1
+        metricas["erros"] += 1
 
-    salvar_metricas()
+        # Registra os rótulos apresentados como incorretos.
+        negativos = dados_termo["negativos"]
+
+        for previsao in previsoes:
+            rotulo = normalizar(previsao["rotulo"])
+            negativos[rotulo] = int(negativos.get(rotulo, 0)) + 1
+
+    metricas["total"] = metricas["acertos"] + metricas["erros"]
+
+    avaliacoes[chave] = {
+        "termo": termo,
+        "resultado": "acerto" if acertou else "erro",
+    }
+
+    metricas_salvas = salvar_json(ARQUIVO_METRICAS, metricas)
+    feedback_salvo = salvar_json(ARQUIVO_FEEDBACK, feedback)
+    avaliacoes_salvas = salvar_json(ARQUIVO_AVALIACOES, avaliacoes)
+
+    if not (
+        metricas_salvas
+        and feedback_salvo
+        and avaliacoes_salvas
+    ):
+        return (
+            False,
+            "Não foi possível salvar todos os arquivos. "
+            "Verifique as permissões de gravação do ambiente.",
+        )
+
+    return True, "Feedback registrado com sucesso!"
 
 
 # =========================================================
-# 8. ENTRADA DA IMAGEM
+# INTERFACE
 # =========================================================
 
-alvo_usuario = st.text_input(
-    "O que você quer que a IA reconheça?",
-    placeholder="Ex.: gato, tartaruga, baleia, abacaxi...",
+st.title("Detector Universal de Imagens com IA 🤖")
+
+st.write(
+    "Digite o nome de um animal ou objeto, envie uma imagem "
+    "e veja as previsões do modelo."
 )
 
-uploaded_file = st.file_uploader(
+st.info(
+    "O modelo MobileNetV2 foi treinado com categorias do ImageNet. "
+    "Ele não consegue reconhecer todos os objetos existentes."
+)
+
+texto_digitado = st.text_input(
+    "Qual animal ou objeto você quer identificar?",
+    placeholder="Ex.: tartaruga, cachorro, carro, cadeira...",
+)
+
+idioma_selecionado = st.selectbox(
+    "Idioma do texto digitado",
+    options=list(IDIOMAS.keys()),
+    index=1,
+    help=(
+        "Escolha o idioma do texto para ajudar a tradução. "
+        "A detecção automática também está disponível."
+    ),
+)
+
+arquivo_imagem = st.file_uploader(
     "Envie uma imagem",
     type=["jpg", "jpeg", "png"],
 )
 
-feedback = carregar_feedback()
-
-
-# =========================================================
-# 9. PROCESSAMENTO DA IMAGEM
-# =========================================================
-
-if uploaded_file is not None:
-
+if arquivo_imagem is not None:
     try:
-        img = Image.open(uploaded_file).convert("RGB")
-
+        imagem_visualizacao = Image.open(arquivo_imagem).convert("RGB")
         st.image(
-            img,
+            imagem_visualizacao,
             caption="Imagem enviada",
             use_container_width=True,
         )
-
     except Exception:
         st.error("Não foi possível abrir essa imagem.")
-        img = None
 
-    if img is not None:
+if st.button("🔍 Analisar imagem", type="primary", use_container_width=True):
+    if not texto_digitado.strip():
+        st.warning("Digite o nome de um animal ou objeto.")
 
-        if not alvo_usuario.strip():
-            st.info(
-                "Digite o nome do animal ou objeto que deseja reconhecer."
+    elif arquivo_imagem is None:
+        st.warning("Envie uma imagem antes de iniciar a análise.")
+
+    else:
+        try:
+            bytes_imagem = arquivo_imagem.getvalue()
+            idioma_codigo = IDIOMAS[idioma_selecionado]
+
+            with st.spinner("Traduzindo o texto..."):
+                texto_em_ingles = traduzir_para_ingles(
+                    texto_digitado,
+                    idioma_codigo,
+                )
+
+            st.session_state["traducao_atual"] = texto_em_ingles
+
+            with st.spinner("Analisando a imagem com a IA..."):
+                imagem, imagem_processada = preparar_imagem(
+                    arquivo_imagem
+                )
+
+                modelo = carregar_modelo()
+                resultado_modelo = modelo.predict(
+                    imagem_processada,
+                    verbose=0,
+                )
+
+                previsoes_brutas = decode_predictions(
+                    resultado_modelo,
+                    top=5,
+                )[0]
+
+                previsoes = [
+                    (rotulo.replace("_", " "), float(probabilidade))
+                    for _, rotulo, probabilidade in previsoes_brutas
+                ]
+
+                feedback_atual = ler_json(ARQUIVO_FEEDBACK, {})
+
+                previsoes_ajustadas = pontuar_previsoes(
+                    previsoes,
+                    texto_em_ingles,
+                    feedback_atual,
+                )
+
+                corresponde = any(
+                    verificar_correspondencia(
+                        texto_em_ingles,
+                        item["rotulo"],
+                    )
+                    for item in previsoes_ajustadas
+                )
+
+                chave = criar_chave_avaliacao(
+                    texto_digitado,
+                    idioma_codigo,
+                    bytes_imagem,
+                )
+
+                avaliacoes_anteriores = ler_json(
+                    ARQUIVO_AVALIACOES,
+                    {},
+                )
+
+                st.session_state["analise_atual"] = {
+                    "texto_original": texto_digitado,
+                    "texto_ingles": texto_em_ingles,
+                    "previsoes": previsoes_ajustadas,
+                    "corresponde": corresponde,
+                    "chave": chave,
+                    "ja_registrada": chave in avaliacoes_anteriores,
+                }
+
+        except ValueError as erro:
+            st.error(str(erro))
+
+        except RuntimeError as erro:
+            st.error(str(erro))
+
+        except Exception as erro:
+            st.error(
+                "Ocorreu um erro durante a análise. "
+                "Verifique a imagem e tente novamente."
             )
-
-        else:
-
-            # ---------------------------------------------
-            # 9.1 TRADUZIR ANTES DE ANALISAR
-            # ---------------------------------------------
-
-            try:
-                with st.spinner("Traduzindo para inglês..."):
-                    termo_ingles = traduzir_para_ingles(alvo_usuario)
-
-            except (ValueError, RuntimeError) as erro:
-                st.error(str(erro))
-                termo_ingles = None
-
-            # Prossegue apenas se a tradução funcionar.
-            if termo_ingles:
-
-                st.write(
-                    f"**Termo original:** {alvo_usuario}"
-                )
-
-                st.write(
-                    f"**Tradução para inglês:** {termo_ingles}"
-                )
-
-                # -----------------------------------------
-                # 9.2 PREPARAR E ANALISAR A IMAGEM
-                # -----------------------------------------
-
-                try:
-                    with st.spinner("Analisando a imagem..."):
-                        img_resized = img.resize((224, 224))
-
-                        x = keras_image.img_to_array(img_resized)
-                        x = np.expand_dims(x, axis=0)
-                        x = preprocess_input(x)
-
-                        preds = model.predict(x, verbose=0)
-
-                        decoded = decode_predictions(
-                            preds,
-                            top=5,
-                        )[0]
-
-                except Exception as erro:
-                    st.error(
-                        f"Não foi possível analisar a imagem: {erro}"
-                    )
-                    decoded = None
-
-                if decoded is not None:
-
-                    # -------------------------------------
-                    # 9.3 APLICAR FEEDBACK ANTERIOR
-                    # -------------------------------------
-
-                    termo = normalizar(termo_ingles)
-
-                    memoria = feedback.get(
-                        termo,
-                        {
-                            "positivos": {},
-                            "negativos": {},
-                        },
-                    )
-
-                    positivos = memoria.get("positivos", {})
-                    negativos = memoria.get("negativos", {})
-
-                    previsoes = []
-
-                    for _, label, prob in decoded:
-                        label_en = label.replace("_", " ").lower()
-                        label_norm = normalizar(label_en)
-
-                        pontuacao = float(prob)
-
-                        # Ajuste heurístico usando feedback salvo.
-                        pontuacao += (
-                            0.20 * positivos.get(label_norm, 0)
-                        )
-
-                        pontuacao -= (
-                            0.20 * negativos.get(label_norm, 0)
-                        )
-
-                        pontuacao = max(
-                            0.0,
-                            min(1.0, pontuacao),
-                        )
-
-                        previsoes.append({
-                            "label": label_en,
-                            "normalizado": label_norm,
-                            "probabilidade": float(prob),
-                            "pontuacao": pontuacao,
-                        })
-
-                    previsoes.sort(
-                        key=lambda item: item["pontuacao"],
-                        reverse=True,
-                    )
-
-                    # -------------------------------------
-                    # 9.4 VERIFICAR CORRESPONDÊNCIA
-                    # -------------------------------------
-
-                    encontrou = any(
-                        termo == item["normalizado"]
-                        or termo in item["normalizado"]
-                        or item["normalizado"] in termo
-                        for item in previsoes
-                    )
-
-                    if encontrou:
-                        st.success(
-                            f"Foi encontrada uma correspondência "
-                            f"para **{alvo_usuario}**!"
-                        )
-                    else:
-                        st.error(
-                            f"Não foi encontrada correspondência textual "
-                            f"para **{alvo_usuario}** nas cinco previsões."
-                        )
-
-                    st.caption(
-                        "A correspondência é textual. O modelo original "
-                        "reconhece categorias do ImageNet, não todos os "
-                        "animais e objetos existentes."
-                    )
-
-                    # -------------------------------------
-                    # 9.5 EXIBIR PREVISÕES
-                    # -------------------------------------
-
-                    with st.expander("🔎 Ver as cinco previsões da IA"):
-                        for i, item in enumerate(previsoes, 1):
-                            label_pt = traduzir_para_portugues(
-                                item["label"]
-                            )
-
-                            st.write(
-                                f"**{i}. {item['label']}** "
-                                f"(*{label_pt}*) — "
-                                f"Confiança original: "
-                                f"{item['probabilidade'] * 100:.2f}%"
-                            )
-
-                            if (
-                                item["pontuacao"]
-                                != item["probabilidade"]
-                            ):
-                                st.caption(
-                                    "Pontuação ajustada pelo histórico: "
-                                    f"{item['pontuacao'] * 100:.2f}%"
-                                )
-
-                    st.divider()
-
-                    # -------------------------------------
-                    # 9.6 IDENTIFICAR A AVALIAÇÃO
-                    # -------------------------------------
-
-                    hash_imagem = hashlib.sha256(
-                        uploaded_file.getvalue()
-                    ).hexdigest()
-
-                    chave_avaliacao = (
-                        f"{hash_imagem}|{termo}"
-                    )
-
-                    st.write("**A IA acertou?**")
-
-                    col_sim, col_nao = st.columns(2)
-
-                    # -------------------------------------
-                    # 9.7 BOTÃO DE ACERTO
-                    # -------------------------------------
-
-                    with col_sim:
-                        if st.button(
-                            "✅ Sim, acertou",
-                            use_container_width=True,
-                        ):
-
-                            if (
-                                st.session_state.ultima_avaliacao
-                                == chave_avaliacao
-                            ):
-                                st.warning(
-                                    "Essa avaliação já foi registrada "
-                                    "nesta sessão."
-                                )
-
-                            else:
-                                memoria = feedback.setdefault(
-                                    termo,
-                                    {
-                                        "positivos": {},
-                                        "negativos": {},
-                                    },
-                                )
-
-                                compativeis = [
-                                    item["normalizado"]
-                                    for item in previsoes
-                                    if (
-                                        termo == item["normalizado"]
-                                        or termo in item["normalizado"]
-                                        or item["normalizado"] in termo
-                                    )
-                                ]
-
-                                if compativeis:
-                                    for label in compativeis:
-                                        memoria["positivos"][label] = (
-                                            memoria["positivos"].get(
-                                                label, 0
-                                            ) + 1
-                                        )
-
-                                        memoria["negativos"].pop(
-                                            label, None
-                                        )
-
-                                    salvar_json(
-                                        ARQUIVO_FEEDBACK,
-                                        feedback,
-                                    )
-
-                                registrar_resultado(True)
-
-                                st.session_state.ultima_avaliacao = (
-                                    chave_avaliacao
-                                )
-
-                                st.success("Acerto registrado!")
-                                st.rerun()
-
-                    # -------------------------------------
-                    # 9.8 BOTÃO DE ERRO
-                    # -------------------------------------
-
-                    with col_nao:
-                        if st.button(
-                            "❌ Não, errou",
-                            use_container_width=True,
-                        ):
-
-                            if (
-                                st.session_state.ultima_avaliacao
-                                == chave_avaliacao
-                            ):
-                                st.warning(
-                                    "Essa avaliação já foi registrada "
-                                    "nesta sessão."
-                                )
-
-                            else:
-                                memoria = feedback.setdefault(
-                                    termo,
-                                    {
-                                        "positivos": {},
-                                        "negativos": {},
-                                    },
-                                )
-
-                                for item in previsoes:
-                                    label = item["normalizado"]
-
-                                    memoria["negativos"][label] = (
-                                        memoria["negativos"].get(
-                                            label, 0
-                                        ) + 1
-                                    )
-
-                                    memoria["positivos"].pop(
-                                        label, None
-                                    )
-
-                                salvar_json(
-                                    ARQUIVO_FEEDBACK,
-                                    feedback,
-                                )
-
-                                registrar_resultado(False)
-
-                                st.session_state.ultima_avaliacao = (
-                                    chave_avaliacao
-                                )
-
-                                st.success(
-                                    "Erro registrado no histórico!"
-                                )
-
-                                st.rerun()
+            st.caption(f"Detalhes técnicos: {str(erro)[:500]}")
 
 
 # =========================================================
-# 10. MÉTRICAS ACUMULADAS NO FINAL DA PÁGINA
+# RESULTADO DA ANÁLISE
+# =========================================================
+
+if "analise_atual" in st.session_state:
+    analise = st.session_state["analise_atual"]
+
+    st.divider()
+    st.subheader("Resultado da análise")
+
+    st.write("**Texto original:**", analise["texto_original"])
+    st.write("**Texto traduzido para inglês:**", analise["texto_ingles"])
+
+    st.write("**As principais previsões foram:**")
+
+    for indice, previsao in enumerate(analise["previsoes"], start=1):
+        confianca = previsao["confianca"] * 100
+
+        st.write(
+            f"{indice}. **{previsao['rotulo'].title()}** "
+            f"— confiança original: {confianca:.2f}%"
+        )
+
+    if analise["corresponde"]:
+        st.success(
+            "Foi encontrada uma correspondência textual entre "
+            "o termo procurado e pelo menos um dos rótulos previstos."
+        )
+    else:
+        st.warning(
+            "O termo procurado não corresponde textualmente "
+            "às cinco principais previsões."
+        )
+
+    st.caption(
+        "A correspondência é uma comparação de palavras, não uma "
+        "confirmação semântica. A confiança é a pontuação original "
+        "do modelo; o feedback não modifica os pesos do modelo."
+    )
+
+    st.divider()
+    st.subheader("A IA acertou?")
+
+    if analise["ja_registrada"]:
+        st.info(
+            "Esta combinação de imagem e texto já foi avaliada. "
+            "Ela não será contabilizada novamente."
+        )
+
+    else:
+        st.write(
+            "Seu feedback será salvo para atualizar as métricas "
+            "e ajustar heuristicamente as pontuações em análises futuras."
+        )
+
+        coluna_sim, coluna_nao = st.columns(2)
+
+        with coluna_sim:
+            if st.button(
+                "✅ Sim, acertou",
+                use_container_width=True,
+            ):
+                sucesso, mensagem = registrar_feedback(
+                    analise["chave"],
+                    analise["texto_ingles"],
+                    analise["previsoes"],
+                    True,
+                )
+
+                if sucesso:
+                    st.success(mensagem)
+                    st.session_state["analise_atual"]["ja_registrada"] = True
+                    st.rerun()
+                else:
+                    st.error(mensagem)
+
+        with coluna_nao:
+            if st.button(
+                "❌ Não, errou",
+                use_container_width=True,
+            ):
+                sucesso, mensagem = registrar_feedback(
+                    analise["chave"],
+                    analise["texto_ingles"],
+                    analise["previsoes"],
+                    False,
+                )
+
+                if sucesso:
+                    st.success(mensagem)
+                    st.session_state["analise_atual"]["ja_registrada"] = True
+                    st.rerun()
+                else:
+                    st.error(mensagem)
+
+
+# =========================================================
+# MÉTRICAS ACUMULADAS
 # =========================================================
 
 st.divider()
-st.subheader("📊 Métricas acumuladas")
-st.caption(
-    "Todas as avaliações registradas são contabilizadas, "
-    "inclusive após fechar e reabrir o aplicativo."
-)
+st.header("📊 Métricas acumuladas da IA")
 
-total = st.session_state.total_rodadas
-acertos = st.session_state.acertos
-erros = st.session_state.erros
+metricas = carregar_metricas()
 
-pct_acertos = (
-    acertos / total * 100
-    if total > 0
-    else 0.0
-)
-
-pct_erros = (
-    erros / total * 100
-    if total > 0
-    else 0.0
-)
-
-col1, col2, col3, col4 = st.columns(4)
-
-col1.metric(
-    "Total de tentativas",
-    total,
-)
-
-col2.metric(
-    "Acertos",
-    acertos,
-    f"{pct_acertos:.2f}%",
-)
-
-col3.metric(
-    "Erros",
-    erros,
-    f"{pct_erros:.2f}%",
-    delta_color="inverse",
-)
-
-col4.metric(
-    "Acurácia total",
-    f"{pct_acertos:.2f}%",
-)
+total = metricas["total"]
+acertos = metricas["acertos"]
+erros = metricas["erros"]
 
 if total > 0:
-    st.progress(pct_acertos / 100)
+    percentual_acertos = (acertos / total) * 100
+    percentual_erros = (erros / total) * 100
 else:
-    st.progress(0.0)
-    st.info(
-        "As métricas serão atualizadas quando você avaliar "
-        "a primeira imagem."
-    )
+    percentual_acertos = 0.0
+    percentual_erros = 0.0
 
-st.caption(
-    f"Conferência: {acertos} acertos + {erros} erros = "
-    f"{total} tentativas."
+coluna_total, coluna_acertos, coluna_erros = st.columns(3)
+
+coluna_total.metric("Avaliações", total)
+coluna_acertos.metric("Acertos", acertos)
+coluna_erros.metric("Erros", erros)
+
+coluna_pct_acertos, coluna_pct_erros = st.columns(2)
+
+coluna_pct_acertos.metric(
+    "Percentual de acertos",
+    f"{percentual_acertos:.2f}%",
 )
 
-# O reset é opcional e apaga apenas as métricas.
-# O histórico de feedback continua preservado.
-if st.button("🔄 Zerar métricas acumuladas"):
+coluna_pct_erros.metric(
+    "Percentual de erros",
+    f"{percentual_erros:.2f}%",
+)
 
-    st.session_state.total_rodadas = 0
-    st.session_state.acertos = 0
-    st.session_state.erros = 0
-    st.session_state.ultima_avaliacao = None
+st.caption(
+    "As métricas consideram apenas avaliações em que você clicou "
+    "em 'Sim, acertou' ou 'Não, errou'."
+)
 
-    salvar_metricas()
+with st.expander("Como essas métricas funcionam?"):
+    st.write(
+        "- Cada avaliação confirmada conta uma vez.\n"
+        "- Acertos e erros são registrados em arquivos JSON.\n"
+        "- O cache de tradução reduz chamadas repetidas aos serviços externos.\n"
+        "- O feedback salvo ajusta pontuações de forma heurística.\n"
+        "- O modelo MobileNetV2 não é retreinado automaticamente."
+    )
 
-    st.rerun()
+if st.button("🗑️ Zerar métricas e histórico de avaliações"):
+    metricas_zeradas = METRICAS_INICIAIS.copy()
+
+    metricas_ok = salvar_json(
+        ARQUIVO_METRICAS,
+        metricas_zeradas,
+    )
+
+    avaliacoes_ok = salvar_json(
+        ARQUIVO_AVALIACOES,
+        {},
+    )
+
+    if metricas_ok and avaliacoes_ok:
+        st.success(
+            "Métricas e histórico de avaliações zerados. "
+            "O feedback heurístico foi mantido."
+        )
+        st.rerun()
+    else:
+        st.error(
+            "Não foi possível zerar os arquivos. "
+            "Verifique as permissões de gravação."
+        )
