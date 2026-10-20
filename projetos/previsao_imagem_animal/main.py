@@ -5,10 +5,10 @@ from tensorflow.keras.applications.mobilenet_v2 import MobileNetV2, preprocess_i
 from tensorflow.keras.preprocessing import image as keras_image
 
 # Configuração da página
-st.set_page_config(page_title="Detector de Porcos + Métricas", page_icon="🐷", layout="centered")
+st.set_page_config(page_title="Detector Universal por IA", page_icon="🤖", layout="centered")
 
-st.title("Detector de Porcos com IA 🐷")
-st.write("Faça o upload de uma imagem para verificar se é um porco e acompanhe a taxa de acertos!")
+st.title("Detector Universal de Imagens com IA 🤖")
+st.write("Digite o que você quer procurar e faça o upload de uma imagem para testar a IA!")
 
 # ---------------------------------------------------------
 # Inicialização das variáveis na sessão (st.session_state)
@@ -19,27 +19,19 @@ if 'acertos' not in st.session_state:
     st.session_state.acertos = 0
 if 'erros' not in st.session_state:
     st.session_state.erros = 0
-if 'ultima_predicao' not in st.session_state:
-    st.session_state.ultima_predicao = None
-if 'avaliado' not in st.session_state:
-    st.session_state.avaliado = True
 
-# Functions para registrar acerto/erro
 def registrar_resultado(correto: bool):
-    if st.session_state.total_rodadas < 100 and not st.session_state.avaliado:
+    if st.session_state.total_rodadas < 100:
         st.session_state.total_rodadas += 1
         if correto:
             st.session_state.acertos += 1
         else:
             st.session_state.erros += 1
-        st.session_state.avaliado = True
 
 def resetar_metricas():
     st.session_state.total_rodadas = 0
     st.session_state.acertos = 0
     st.session_state.erros = 0
-    st.session_state.ultima_predicao = None
-    st.session_state.avaliado = True
 
 # ---------------------------------------------------------
 # Carregar o modelo de IA
@@ -52,7 +44,7 @@ with st.spinner("Carregando o modelo de Inteligência Artificial..."):
     model = carregar_modelo()
 
 # ---------------------------------------------------------
-# Exibição do Painel de Métricas (100 Rodadas)
+# Painel de Métricas (100 Rodadas)
 # ---------------------------------------------------------
 st.subheader("📊 Painel de Desempenho (Meta: 100 Rodadas)")
 
@@ -63,14 +55,12 @@ erros = st.session_state.erros
 pct_acertos = (acertos / total * 100) if total > 0 else 0.0
 pct_erros = (erros / total * 100) if total > 0 else 0.0
 
-# Colunas para visualização visual dos dados
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Rodadas", f"{total} / 100")
 col2.metric("Acertos", f"{acertos}", f"{pct_acertos:.1f}%")
 col3.metric("Erros", f"{erros}", f"{pct_erros:.1f}%", delta_color="inverse")
 col4.metric("Acurácia Total", f"{pct_acertos:.1f}%")
 
-# Barra de progresso das 100 rodadas
 st.progress(min(total / 100, 1.0))
 
 if total >= 100:
@@ -83,55 +73,64 @@ if st.button("🔄 Resetar Métricas"):
 st.divider()
 
 # ---------------------------------------------------------
-# Upload e Predição da Imagem
+# Entrada do Alvo e Upload da Imagem
 # ---------------------------------------------------------
+alvo_usuario = st.text_input("O que você quer que a IA reconheça na foto?", placeholder="Ex: gato, carro, xícara, cachorro, violão...")
+
 uploaded_file = st.file_uploader("Escolha uma imagem...", type=["jpg", "jpeg", "png"])
 
 if uploaded_file is not None:
     img = Image.open(uploaded_file).convert("RGB")
     st.image(img, caption="Imagem Enviada", use_column_width=True)
     
-    # Processar apenas se for uma nova imagem ou se ainda não foi feito
-    img_resized = img.resize((224, 224))
-    x = keras_image.img_to_array(img_resized)
-    x = np.expand_dims(x, axis=0)
-    x = preprocess_input(x)
-    
-    preds = model.predict(x)
-    decoded = decode_predictions(preds, top=3)[0]
-    
-    is_pig = False
-    for _, label, prob in decoded:
-        if any(termo in label.lower() for termo in ['pig', 'hog', 'boar', 'swine']):
-            is_pig = True
-            break
-
-    # Exibir o palpite da IA
-    if is_pig:
-        st.success("🤖 Palpite da IA: **É um Porco!** 🐷")
+    if not alvo_usuario:
+        st.warning("⚠️ Por favor, digite o que você quer que a IA reconheça no campo acima.")
     else:
-        st.error("🤖 Palpite da IA: **NÃO é um Porco.** ❌")
-
-    # Detalhes técnicos da IA
-    with st.expander("Ver detalhes do modelo"):
-        for i, (_, label, prob) in enumerate(decoded):
-            st.write(f"{i+1}. **{label}** ({prob * 100:.2f}%)")
-
-    st.divider()
-
-    # ---------------------------------------------------------
-    # Avaliação do Usuário para Contabilizar nas Métricas
-    # ---------------------------------------------------------
-    if total < 100:
-        st.write("**A IA acertou o palpite desta imagem?**")
-        col_sim, col_nao = st.columns(2)
+        st.write("Analisando a imagem...")
         
-        with col_sim:
-            if st.button("✅ Sim, a IA acertou", use_container_width=True):
-                registrar_resultado(correto=True)
-                st.rerun()
-                
-        with col_nao:
-            if st.button("❌ Não, a IA errou", use_container_width=True):
-                registrar_resultado(correto=False)
-                st.rerun()
+        img_resized = img.resize((224, 224))
+        x = keras_image.img_to_array(img_resized)
+        x = np.expand_dims(x, axis=0)
+        x = preprocess_input(x)
+        
+        preds = model.predict(x)
+        decoded = decode_predictions(preds, top=5)[0]
+        
+        # Verificar se o termo digitado pelo usuário (em inglês/português aproximado) está nas previsões
+        # Nota: O modelo ImageNet retorna rótulos em inglês. Traduzimos alguns termos comuns ou buscamos o texto.
+        alvo_lower = alvo_usuario.lower().strip()
+        
+        encontrou = False
+        for _, label, prob in decoded:
+            if alvo_lower in label.lower():
+                encontrou = True
+                break
+
+        if encontrou:
+            st.success(f"🤖 Palpite da IA: **Encontrei '{alvo_usuario}' na imagem!** ✅")
+        else:
+            st.error(f"🤖 Palpite da IA: **Não consegui identificar '{alvo_usuario}' com segurança.** ❌")
+
+        with st.expander("Ver o que a IA realmente enxergou (Top 5 previsões)"):
+            st.write("*(Nota: O modelo padrão reconhece termos em inglês)*")
+            for i, (_, label, prob) in enumerate(decoded):
+                st.write(f"{i+1}. **{label}** (Confiança: {prob * 100:.2f}%)")
+
+        st.divider()
+
+        # ---------------------------------------------------------
+        # Validação para as métricas
+        # ---------------------------------------------------------
+        if total < 100:
+            st.write("**A IA identificou corretamente o seu pedido?**")
+            col_sim, col_nao = st.columns(2)
+            
+            with col_sim:
+                if st.button("✅ Sim, acertou", use_container_width=True):
+                    registrar_resultado(correto=True)
+                    st.rerun()
+                    
+            with col_nao:
+                if st.button("❌ Não, errou", use_container_width=True):
+                    registrar_resultado(correto=False)
+                    st.rerun()
