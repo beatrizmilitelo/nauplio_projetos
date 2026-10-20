@@ -9,7 +9,7 @@ from tensorflow.keras.preprocessing import image as keras_image
 st.set_page_config(page_title="Detector Universal por IA", page_icon="🤖", layout="centered")
 
 st.title("Detector Universal de Imagens com IA 🤖")
-st.write("Digite o que quiser no campo abaixo, aperte **Enter** e faça o upload da foto para testar!")
+st.write("Digite o que quiser em qualquer idioma, aperte **Enter** e faça o upload da foto para testar!")
 
 # ---------------------------------------------------------
 # Inicialização das variáveis na sessão (st.session_state)
@@ -33,6 +33,35 @@ def resetar_metricas():
     st.session_state.total_rodadas = 0
     st.session_state.acertos = 0
     st.session_state.erros = 0
+
+# ---------------------------------------------------------
+# Função de Tradução Segura
+# ---------------------------------------------------------
+def traduzir_para_ingles(texto: str) -> str:
+    texto_limpo = texto.strip().lower()
+    try:
+        # Tenta traduzir especificamente do português para o inglês
+        traducao = GoogleTranslator(source='pt', target='en').translate(texto_limpo)
+        if traducao and traducao.lower() != texto_limpo:
+            return traducao.lower().strip()
+    except Exception:
+        pass
+
+    try:
+        # Fallback para detecção automática de idioma
+        traducao = GoogleTranslator(source='auto', target='en').translate(texto_limpo)
+        if traducao:
+            return traducao.lower().strip()
+    except Exception:
+        pass
+
+    return texto_limpo
+
+def traduzir_para_portugues(texto: str) -> str:
+    try:
+        return GoogleTranslator(source='en', target='pt').translate(texto).lower().strip()
+    except Exception:
+        return texto
 
 # ---------------------------------------------------------
 # Carregar o modelo de IA
@@ -74,9 +103,9 @@ if st.button("🔄 Resetar Métricas"):
 st.divider()
 
 # ---------------------------------------------------------
-# Entrada do Alvo (com suporte a Enter) e Upload da Imagem
+# Entrada do Alvo e Upload da Imagem
 # ---------------------------------------------------------
-alvo_usuario = st.text_input("O que você quer que a IA reconheça?", placeholder="Ex: porco, abacaxi, violão, spaceship...")
+alvo_usuario = st.text_input("O que você quer que a IA reconheça?", placeholder="Ex: gato, porco, abacaxi, violão, spaceship...")
 
 uploaded_file = st.file_uploader("Escolha uma imagem...", type=["jpg", "jpeg", "png"])
 
@@ -85,15 +114,13 @@ if uploaded_file is not None:
     st.image(img, caption="Imagem Enviada", use_column_width=True)
     
     if not alvo_usuario:
-        st.warning("⚠️ Por favor, digite o que você quer que a IA reconheça e aperte Enter.")
+        st.warning("⚠️ Por favor, digite o que você quer que a IA reconheça no campo acima e pressione Enter.")
     else:
-        # Traduz automaticamente o texto digitado de qualquer idioma para o inglês
-        try:
-            termo_ingles = GoogleTranslator(source='auto', target='en').translate(alvo_usuario).lower().strip()
-        except Exception:
-            termo_ingles = alvo_usuario.lower().strip()
+        # Traduz o texto do usuário para inglês
+        termo_ingles = traduzir_para_ingles(alvo_usuario)
+        alvo_lower = alvo_usuario.lower().strip()
         
-        st.write(f"Analisando a imagem procurando por: *{alvo_usuario}* (Traduzido para o inglês: **{termo_ingles}**)...")
+        st.write(f"Analisando a imagem procurando por: *{alvo_usuario}* (Termo buscado pela IA em inglês: **{termo_ingles}**)...")
         
         img_resized = img.resize((224, 224))
         x = keras_image.img_to_array(img_resized)
@@ -103,21 +130,26 @@ if uploaded_file is not None:
         preds = model.predict(x)
         decoded = decode_predictions(preds, top=5)[0]
         
-        # Verifica se o termo traduzido em inglês aparece em alguma das predições da IA
         encontrou = False
+        previsoes_traduzidas = []
+
         for _, label, prob in decoded:
-            if termo_ingles in label.lower():
+            label_lower = label.lower().replace('_', ' ')
+            label_pt = traduzir_para_portugues(label_lower)
+            previsoes_traduzidas.append((label_lower, label_pt, prob))
+
+            # Verifica se o termo em inglês ou a tradução em português correspondem
+            if (termo_ingles in label_lower) or (alvo_lower in label_pt) or (label_lower in termo_ingles):
                 encontrou = True
-                break
 
         if encontrou:
-            st.success(f"🤖 Palpite da IA: **Encontrei '{alvo_usuario}' (traduzido como '{termo_ingles}') na imagem!** ✅")
+            st.success(f"🤖 Palpite da IA: **Encontrei '{alvo_usuario}' (detectado como '{termo_ingles}') na imagem!** ✅")
         else:
             st.error(f"🤖 Palpite da IA: **Não consegui identificar '{alvo_usuario}' com segurança.** ❌")
 
         with st.expander("Ver o que a IA enxergou (Top 5 previsões)"):
-            for i, (_, label, prob) in enumerate(decoded):
-                st.write(f"{i+1}. **{label}** (Confiança: {prob * 100:.2f}%)")
+            for i, (label_en, label_pt, prob) in enumerate(previsoes_traduzidas):
+                st.write(f"{i+1}. **{label_en}** (*{label_pt}*) — Confiança: {prob * 100:.2f}%")
 
         st.divider()
 
