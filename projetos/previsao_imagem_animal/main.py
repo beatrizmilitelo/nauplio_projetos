@@ -1,7 +1,7 @@
 import streamlit as st
 import numpy as np
 from PIL import Image
-from googletrans import Translator
+from deep_translator import GoogleTranslator
 from tensorflow.keras.applications.mobilenet_v2 import MobileNetV2, preprocess_input, decode_predictions
 from tensorflow.keras.preprocessing import image as keras_image
 
@@ -12,10 +12,8 @@ st.title("Detector Universal de Imagens com IA 🤖")
 st.write("Digite o que quiser em **qualquer idioma** e faça o upload da foto para testar!")
 
 # ---------------------------------------------------------
-# Inicialização do Tradutor e do st.session_state
+# Inicialização das variáveis na sessão (st.session_state)
 # ---------------------------------------------------------
-translator = Translator()
-
 if 'total_rodadas' not in st.session_state:
     st.session_state.total_rodadas = 0
 if 'acertos' not in st.session_state:
@@ -89,9 +87,11 @@ if uploaded_file is not None:
     if not alvo_usuario:
         st.warning("⚠️ Por favor, digite o que você quer que a IA reconheça no campo acima.")
     else:
-        # Traduz automaticamente o que o usuário digitou para o inglês
-        traducao = translator.translate(alvo_usuario, dest='en')
-        termo_ingles = traducao.text.lower().strip()
+        # Traduz automaticamente o texto digitado para o inglês usando deep-translator
+        try:
+            termo_ingles = GoogleTranslator(source='auto', target='en').translate(alvo_usuario).lower().strip()
+        except Exception:
+            termo_ingles = alvo_usuario.lower().strip()
         
         st.write(f"Analisando a imagem procurando por: *{alvo_usuario}* (Traduzido para IA: **{termo_ingles}**)...")
         
