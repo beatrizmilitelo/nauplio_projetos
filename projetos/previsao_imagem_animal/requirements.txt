@@ -2,4 +2,4 @@ streamlit
 tensorflow
 pillow
 numpy
-matplotlib
+deep-translator
