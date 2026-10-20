@@ -1,6 +1,7 @@
 import streamlit as st
 import numpy as np
 from PIL import Image
+from googletrans import Translator
 from tensorflow.keras.applications.mobilenet_v2 import MobileNetV2, preprocess_input, decode_predictions
 from tensorflow.keras.preprocessing import image as keras_image
 
@@ -8,11 +9,13 @@ from tensorflow.keras.preprocessing import image as keras_image
 st.set_page_config(page_title="Detector Universal por IA", page_icon="🤖", layout="centered")
 
 st.title("Detector Universal de Imagens com IA 🤖")
-st.write("Digite o que você quer procurar e faça o upload de uma imagem para testar a IA!")
+st.write("Digite o que quiser em **qualquer idioma** e faça o upload da foto para testar!")
 
 # ---------------------------------------------------------
-# Inicialização das variáveis na sessão (st.session_state)
+# Inicialização do Tradutor e do st.session_state
 # ---------------------------------------------------------
+translator = Translator()
+
 if 'total_rodadas' not in st.session_state:
     st.session_state.total_rodadas = 0
 if 'acertos' not in st.session_state:
@@ -75,7 +78,7 @@ st.divider()
 # ---------------------------------------------------------
 # Entrada do Alvo e Upload da Imagem
 # ---------------------------------------------------------
-alvo_usuario = st.text_input("O que você quer que a IA reconheça na foto?", placeholder="Ex: gato, carro, xícara, cachorro, violão...")
+alvo_usuario = st.text_input("O que você quer que a IA reconheça?", placeholder="Ex: porco, abacaxi, violão, spaceship...")
 
 uploaded_file = st.file_uploader("Escolha uma imagem...", type=["jpg", "jpeg", "png"])
 
@@ -86,7 +89,11 @@ if uploaded_file is not None:
     if not alvo_usuario:
         st.warning("⚠️ Por favor, digite o que você quer que a IA reconheça no campo acima.")
     else:
-        st.write("Analisando a imagem...")
+        # Traduz automaticamente o que o usuário digitou para o inglês
+        traducao = translator.translate(alvo_usuario, dest='en')
+        termo_ingles = traducao.text.lower().strip()
+        
+        st.write(f"Analisando a imagem procurando por: *{alvo_usuario}* (Traduzido para IA: **{termo_ingles}**)...")
         
         img_resized = img.resize((224, 224))
         x = keras_image.img_to_array(img_resized)
@@ -96,13 +103,10 @@ if uploaded_file is not None:
         preds = model.predict(x)
         decoded = decode_predictions(preds, top=5)[0]
         
-        # Verificar se o termo digitado pelo usuário (em inglês/português aproximado) está nas previsões
-        # Nota: O modelo ImageNet retorna rótulos em inglês. Traduzimos alguns termos comuns ou buscamos o texto.
-        alvo_lower = alvo_usuario.lower().strip()
-        
+        # Verifica se o termo traduzido aparece em alguma das predições da IA
         encontrou = False
         for _, label, prob in decoded:
-            if alvo_lower in label.lower():
+            if termo_ingles in label.lower():
                 encontrou = True
                 break
 
@@ -111,8 +115,7 @@ if uploaded_file is not None:
         else:
             st.error(f"🤖 Palpite da IA: **Não consegui identificar '{alvo_usuario}' com segurança.** ❌")
 
-        with st.expander("Ver o que a IA realmente enxergou (Top 5 previsões)"):
-            st.write("*(Nota: O modelo padrão reconhece termos em inglês)*")
+        with st.expander("Ver o que a IA enxergou (Top 5 previsões)"):
             for i, (_, label, prob) in enumerate(decoded):
                 st.write(f"{i+1}. **{label}** (Confiança: {prob * 100:.2f}%)")
 
