@@ -1,118 +1,136 @@
-import smtplib
-import pandas as pd
-import streamlit as st
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from email.mime.image import MIMEImage
+import io
+import smtplib
+from typing import List
+from fastapi import FastAPI, File, Form, UploadFile
+from fastapi.responses import HTMLResponse
+import pandas as pd
 
-def send_bulk_email_with_embedded_image(sender_email, sender_password, df, subject, body_html, image_file):
-    recipients = df.iloc[:, 0].dropna().astype(str).tolist()
-    
-    # Identifica o servidor SMTP correto com base no domínio do e-mail
-    sender_email_lower = sender_email.strip().lower()
-    if "gmail.com" in sender_email_lower:
-        smtp_server = "smtp.gmail.com"
-        smtp_port = 587
-    elif "outlook" in sender_email_lower or "hotmail" in sender_email_lower or "live" in sender_email_lower or "office365" in sender_email_lower:
-        smtp_server = "smtp.office365.com"
-        smtp_port = 587
-    else:
-        return False, "Domínio de e-mail não reconhecido automaticamente. Use um e-mail do Gmail ou Outlook/Hotmail."
+app = FastAPI()
 
-    try:
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
-        server.login(sender_email, sender_password)
-    except Exception as e:
-        return False, f"Erro ao conectar ou autenticar no servidor SMTP: {e}"
 
-    progress_bar = st.progress(0)
-    total = len(recipients)
+@app.get("/", response_class=HTMLResponse)
+def home():
+  return """
+    <!DOCTYPE html>
+    <html lang="pt-br">
+    <head>
+        <meta charset="UTF-8">
+        <title>Robô de Envio de E-mails com Anexos</title>
+        <style>
+            body { font-family: Arial, sans-serif; background-color: #f4f4f9; padding: 20px; }
+            .container { max-width: 600px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); margin: auto; }
+            h2 { color: #333; }
+            label { font-weight: bold; display: block; margin-top: 10px; }
+            input, textarea { width: 100%; padding: 8px; margin-top: 5px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+            button { background: #007BFF; color: white; border: none; padding: 10px 15px; margin-top: 20px; cursor: pointer; width: 100%; border-radius: 4px; font-size: 16px; }
+            button:hover { background: #0056b3; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h2>📧 Robô de Envio de E-mails</h2>
+            <form action="/enviar" method="post" enctype="multipart/form-data">
+                <label>E-mail do Gmail:</label>
+                <input type="email" name="sender_email" required>
 
-    for i, recipient in enumerate(recipients):
-        if "@" not in recipient:
-            continue
-            
-        try:
-            msg = MIMEMultipart('related')
-            msg['From'] = sender_email
-            msg['To'] = recipient
-            msg['Subject'] = subject
+                <label>Senha de Aplicativo do Gmail:</label>
+                <input type="password" name="sender_password" required>
 
-            body = MIMEMultipart('alternative')
-            body.attach(MIMEText(body_html, 'html'))
-            msg.attach(body)
+                <label>Planilha de Destinatários (.xlsx):</label>
+                <input type="file" name="excel_file" accept=".xlsx" required>
 
-            image_bytes = image_file.getvalue()
-            img = MIMEImage(image_bytes)
-            img.add_header('Content-ID', '<image1>')
-            img.add_header('Content-Disposition', 'inline', filename=image_file.name)
-            msg.attach(img)
+                <label>Arquivos em Anexo (PDF ou Imagens - selecione um ou mais):</label>
+                <input type="file" name="attachment_files" accept=".pdf,image/*" multiple required>
 
-            server.sendmail(sender_email, recipient, msg.as_string())
-            progress_bar.progress((i + 1) / total)
-        except Exception as e:
-            st.warning(f"Erro ao enviar para {recipient}: {e}")
+                <label>Assunto:</label>
+                <input type="text" name="subject" value="Campanha Promocional" required>
+
+                <label>3. Corpo do E-mail (HTML)</label>
+                <textarea name="body_html" rows="10" required><html>
+<body>
+<h2>Promoção Especial!</h2>
+<p>Confira os documentos e arquivos em anexo para mais detalhes.</p>
+<p>Esperamos você!</p>
+</body>
+</html></textarea>
+
+                <button type="submit">🚀 Enviar E-mails</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    """
+
+
+@app.post("/enviar", response_class=HTMLResponse)
+async def enviar_emails(
+    sender_email: str = Form(...),
+    sender_password: str = Form(...),
+    excel_file: UploadFile = File(...),
+    attachment_files: List[UploadFile] = File(...),
+    subject: str = Form(...),
+    body_html: str = Form(...),
+):
+  try:
+    # Ler o excel
+    contents_excel = await excel_file.read()
+    df = pd.read_excel(io.BytesIO(contents_excel))
+
+    if "Email" not in df.columns:
+      return (
+          "<h3>Erro: A planilha precisa possuir uma coluna chamada"
+          ' Email.</h3><a href="/">Voltar</a>'
+      )
+
+    recipients = df["Email"].dropna().tolist()
+
+    # Ler todos os arquivos anexados antecipadamente para a memória
+    attachments_data = []
+    for file in attachment_files:
+      content = await file.read()
+      filename = file.filename or "arquivo"
+      attachments_data.append((content, filename))
+
+    # Conectar ao SMTP
+    server = smtplib.SMTP("smtp.gmail.com", 587)
+    server.starttls()
+    server.login(sender_email, sender_password)
+
+    enviados = 0
+    for recipient in recipients:
+      try:
+        msg = MIMEMultipart()
+        msg["From"] = sender_email
+        msg["To"] = recipient
+        msg["Subject"] = subject
+
+        # Corpo do e-mail em HTML (sem tags de imagem embutida)
+        msg.attach(MIMEText(body_html, "html", "utf-8"))
+
+        # Iterar e anexar cada arquivo enviado pelo usuário
+        for file_bytes, filename in attachments_data:
+          part = MIMEBase("application", "octet-stream")
+          part.set_payload(file_bytes)
+          encoders.encode_base64(part)
+          part.add_header(
+              "Content-Disposition", f"attachment; filename= {filename}"
+          )
+          msg.attach(part)
+
+        server.sendmail(sender_email, recipient, msg.as_string())
+        enviados += 1
+      except Exception:
+        pass
 
     server.quit()
-    return True, "E-mails enviados com sucesso!"
 
-st.set_page_config(page_title="Disparador de E-mails", page_icon="📧", layout="centered")
-
-st.title("📧 Disparador de E-mails em Massa")
-st.markdown("Envie campanhas personalizadas com imagens embutidas usando contas do **Outlook** ou **Gmail**.")
-
-st.subheader("1. Credenciais e Configurações")
-col1, col2 = st.columns(2)
-with col1:
-    sender_email = st.text_input("E-mail do Remetente", placeholder="seu-email@gmail.com ou @outlook.com")
-with col2:
-    sender_password = st.text_input("Senha ou Senha de App", type="password")
-    
-subject = st.text_input("Assunto do E-mail", value="Campanha Promocional")
-
-st.subheader("2. Arquivos (Planilha e Imagem)")
-uploaded_excel = st.file_uploader("Envie a planilha (Excel .xlsx)", type=["xlsx"])
-
-st.info("""
-📌 **Como montar sua planilha Excel (.xlsx):**
-- A planilha deve conter **apenas uma coluna** com os e-mails.
-- **Não coloque cabeçalho** (comece a colocar os e-mails direto na primeira linha da primeira coluna).
-- Exemplo:
-  
-  | Coluna A |
-  | :--- |
-  | cliente1@exemplo.com |
-  | cliente2@exemplo.com |
-""")
-
-uploaded_image = st.file_uploader("Envie a imagem para o corpo do e-mail", type=["png", "jpg", "jpeg"])
-
-st.subheader("3. Corpo do E-mail (HTML)")
-default_html = """<html>
-  <body>
-    <h2>Promoção Especial!</h2>
-    <p>Confira nossa promoção exclusiva para você.</p>
-    <img src="cid:image1" alt="Imagem Promocional" style="max-width:100%;">
-    <p>Não perca!</p>
-  </body>
-</html>"""
-body_html = st.text_area("Código HTML do E-mail", value=default_html, height=150)
-
-if st.button("🚀 Enviar E-mails", type="primary"):
-    if not sender_email or not sender_password:
-        st.error("Por favor, preencha o e-mail e a senha do remetente.")
-    elif not uploaded_excel:
-        st.error("Por favor, envie a planilha Excel.")
-    elif not uploaded_image:
-        st.error("Por favor, envie a imagem.")
-    else:
-        df = pd.read_excel(uploaded_excel, header=None)
-        with st.spinner("Enviando e-mails, por favor aguarde..."):
-            success, message = send_bulk_email_with_embedded_image(
-                sender_email, sender_password, df, subject, body_html, uploaded_image
-            )
-            if success:
-                st.success(message)
-            else:
-                st.error(message)
+    return f"""
+        <h3>✅ {enviados} de {len(recipients)} e-mails enviados com sucesso!</h3>
+        <br><a href="/">Voltar</a>
+        """
+  except Exception as e:
+    return f"<h3>Erro ao processar: {str(e)}</h3><br><a href='/'>Voltar</a>"
