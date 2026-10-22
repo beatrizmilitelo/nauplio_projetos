@@ -2,135 +2,106 @@ from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-import io
 import smtplib
-from typing import List
-from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.responses import HTMLResponse
 import pandas as pd
+import streamlit as st
 
-app = FastAPI()
+st.set_page_config(
+    page_title="Robô de Envio de E-mails", page_icon="📧", layout="centered"
+)
 
+st.title("📧 Robô de Envio de E-mails com Anexos")
+st.markdown("Preencha os dados abaixo para disparar sua campanha.")
 
-@app.get("/", response_class=HTMLResponse)
-def home():
-  return """
-    <!DOCTYPE html>
-    <html lang="pt-br">
-    <head>
-        <meta charset="UTF-8">
-        <title>Robô de Envio de E-mails com Anexos</title>
-        <style>
-            body { font-family: Arial, sans-serif; background-color: #f4f4f9; padding: 20px; }
-            .container { max-width: 600px; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); margin: auto; }
-            h2 { color: #333; }
-            label { font-weight: bold; display: block; margin-top: 10px; }
-            input, textarea { width: 100%; padding: 8px; margin-top: 5px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
-            button { background: #007BFF; color: white; border: none; padding: 10px 15px; margin-top: 20px; cursor: pointer; width: 100%; border-radius: 4px; font-size: 16px; }
-            button:hover { background: #0056b3; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h2>📧 Robô de Envio de E-mails</h2>
-            <form action="/enviar" method="post" enctype="multipart/form-data">
-                <label>E-mail do Gmail:</label>
-                <input type="email" name="sender_email" required>
+with st.form("email_form"):
+  sender_email = st.text_input("E-mail do Gmail:")
+  sender_password = st.text_input(
+      "Senha de Aplicativo do Gmail:", type="password"
+  )
 
-                <label>Senha de Aplicativo do Gmail:</label>
-                <input type="password" name="sender_password" required>
+  excel_file = st.file_uploader(
+      "Planilha de Destinatários (.xlsx):", type=["xlsx"]
+  )
+  attachment_files = st.file_uploader(
+      "Arquivos em Anexo (PDF ou Imagens - selecione um ou mais):",
+      type=["pdf", "png", "jpg", "jpeg"],
+      accept_multiple_files=True,
+  )
 
-                <label>Planilha de Destinatários (.xlsx):</label>
-                <input type="file" name="excel_file" accept=".xlsx" required>
+  subject = st.text_input("Assunto:", value="Campanha Promocional")
 
-                <label>Arquivos em Anexo (PDF ou Imagens - selecione um ou mais):</label>
-                <input type="file" name="attachment_files" accept=".pdf,image/*" multiple required>
-
-                <label>Assunto:</label>
-                <input type="text" name="subject" value="Campanha Promocional" required>
-
-                <label>3. Corpo do E-mail (HTML)</label>
-                <textarea name="body_html" rows="10" required><html>
+  default_html = """<html>
 <body>
 <h2>Promoção Especial!</h2>
 <p>Confira os documentos e arquivos em anexo para mais detalhes.</p>
 <p>Esperamos você!</p>
 </body>
-</html></textarea>
+</html>"""
+  body_html = st.text_area("Corpo do E-mail (HTML):", value=default_html, height=150)
 
-                <button type="submit">🚀 Enviar E-mails</button>
-            </form>
-        </div>
-    </body>
-    </html>
-    """
+  submit_button = st.form_submit_button("🚀 Enviar E-mails")
 
+if submit_button:
+  if not sender_email or not sender_password or not excel_file:
+    st.error(
+        "Por favor, preencha o e-mail, a senha e envie a planilha de"
+        " destinatários."
+    )
+  else:
+    try:
+      with st.spinner("Processando e enviando e-mails..."):
+        # Ler o excel
+        df = pd.read_excel(excel_file)
 
-@app.post("/enviar", response_class=HTMLResponse)
-async def enviar_emails(
-    sender_email: str = Form(...),
-    sender_password: str = Form(...),
-    excel_file: UploadFile = File(...),
-    attachment_files: List[UploadFile] = File(...),
-    subject: str = Form(...),
-    body_html: str = Form(...),
-):
-  try:
-    # Ler o excel
-    contents_excel = await excel_file.read()
-    df = pd.read_excel(io.BytesIO(contents_excel))
+        if "Email" not in df.columns:
+          st.error("Erro: A planilha precisa possuir uma coluna chamada 'Email'.")
+        else:
+          recipients = df["Email"].dropna().tolist()
 
-    if "Email" not in df.columns:
-      return (
-          "<h3>Erro: A planilha precisa possuir uma coluna chamada"
-          ' Email.</h3><a href="/">Voltar</a>'
-      )
+          # Ler os anexos
+          attachments_data = []
+          if attachment_files:
+            for file in attachment_files:
+              content = file.read()
+              filename = file.name or "arquivo"
+              attachments_data.append((content, filename))
 
-    recipients = df["Email"].dropna().tolist()
+          # Conectar ao SMTP
+          server = smtplib.SMTP("smtp.gmail.com", 587)
+          server.starttls()
+          server.login(sender_email, sender_password)
 
-    # Ler todos os arquivos anexados antecipadamente para a memória
-    attachments_data = []
-    for file in attachment_files:
-      content = await file.read()
-      filename = file.filename or "arquivo"
-      attachments_data.append((content, filename))
+          enviados = 0
+          for recipient in recipients:
+            try:
+              msg = MIMEMultipart()
+              msg["From"] = sender_email
+              msg["To"] = recipient
+              msg["Subject"] = subject
 
-    # Conectar ao SMTP
-    server = smtplib.SMTP("smtp.gmail.com", 587)
-    server.starttls()
-    server.login(sender_email, sender_password)
+              # Corpo do e-mail em HTML
+              msg.attach(MIMEText(body_html, "html", "utf-8"))
 
-    enviados = 0
-    for recipient in recipients:
-      try:
-        msg = MIMEMultipart()
-        msg["From"] = sender_email
-        msg["To"] = recipient
-        msg["Subject"] = subject
+              # Anexar arquivos
+              for file_bytes, filename in attachments_data:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(file_bytes)
+                encoders.encode_base64(part)
+                part.add_header(
+                    "Content-Disposition", f"attachment; filename= {filename}"
+                )
+                msg.attach(part)
 
-        # Corpo do e-mail em HTML (sem tags de imagem embutida)
-        msg.attach(MIMEText(body_html, "html", "utf-8"))
+              server.sendmail(sender_email, recipient, msg.as_string())
+              enviados += 1
+            except Exception:
+              pass
 
-        # Iterar e anexar cada arquivo enviado pelo usuário
-        for file_bytes, filename in attachments_data:
-          part = MIMEBase("application", "octet-stream")
-          part.set_payload(file_bytes)
-          encoders.encode_base64(part)
-          part.add_header(
-              "Content-Disposition", f"attachment; filename= {filename}"
+          server.quit()
+
+          st.success(
+              f"✅ {enviados} de {len(recipients)} e-mails enviados com"
+              " sucesso!"
           )
-          msg.attach(part)
-
-        server.sendmail(sender_email, recipient, msg.as_string())
-        enviados += 1
-      except Exception:
-        pass
-
-    server.quit()
-
-    return f"""
-        <h3>✅ {enviados} de {len(recipients)} e-mails enviados com sucesso!</h3>
-        <br><a href="/">Voltar</a>
-        """
-  except Exception as e:
-    return f"<h3>Erro ao processar: {str(e)}</h3><br><a href='/'>Voltar</a>"
+    except Exception as e:
+      st.error(f"Erro ao processar: {str(e)}")
