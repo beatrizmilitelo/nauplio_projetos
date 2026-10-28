@@ -53,16 +53,13 @@ TERMOS_CONTRASTE = [
 def embedding_texto(termos: tuple):
     return modelo_texto.encode(list(termos), convert_to_tensor=True)
 
-@st.cache_data(show_spinner=False)
-def embedding_imagem(_img_bytes: bytes):
-    return modelo_imagem.encode(Image.open(_img_bytes).convert("RGB"), convert_to_tensor=True)
-
 def analisar(img: Image.Image, termo: str):
     """Retorna a probabilidade (0-1) de o termo estar na imagem, frente aos termos de contraste."""
     termos = tuple([termo] + TERMOS_CONTRASTE)
     emb_txt = embedding_texto(termos)
     emb_img = modelo_imagem.encode(img, convert_to_tensor=True)
     similaridades = util.cos_sim(emb_img, emb_txt)[0].cpu().numpy()
+    
     # Softmax com temperatura de 100 (escala usada pelo CLIP)
     logits = 100.0 * similaridades
     logits -= logits.max()
