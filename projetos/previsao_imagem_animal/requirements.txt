@@ -1,6 +1,5 @@
-
-streamlit
-numpy
-pillow
-deep-translator
-tensorflow
+streamlit>=1.30.0
+numpy>=1.22.0
+pillow>=9.0.0
+sentence-transformers>=2.2.0
+torch>=2.0.0
