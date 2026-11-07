@@ -14,94 +14,102 @@ st.title("📧 Robô de Envio de E-mails com Anexos")
 st.markdown("Preencha os dados abaixo para disparar sua campanha.")
 
 with st.form("email_form"):
-  sender_email = st.text_input("E-mail do Gmail:")
-  sender_password = st.text_input(
-      "Senha de Aplicativo do Gmail:", type="password"
-  )
+    sender_email = st.text_input("E-mail do Gmail:")
+    sender_password = st.text_input(
+        "Senha de Aplicativo do Gmail:", type="password"
+    )
 
-  excel_file = st.file_uploader(
-      "Planilha de Destinatários (.xlsx):", type=["xlsx"]
-  )
-  attachment_files = st.file_uploader(
-      "Arquivos em Anexo (PDF ou Imagens - selecione um ou mais):",
-      type=["pdf", "png", "jpg", "jpeg"],
-      accept_multiple_files=True,
-  )
+    excel_file = st.file_uploader(
+        "Planilha de Destinatários (.xlsx):", type=["xlsx"]
+    )
+    attachment_files = st.file_uploader(
+        "Arquivos em Anexo (PDF ou Imagens - selecione um ou mais):",
+        type=["pdf", "png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+    )
 
-  subject = st.text_input("Assunto:", value="Campanha Promocional")
+    subject = st.text_input("Assunto:", value="Campanha Promocional")
 
-  default_html = """<html>
+    default_html = """<html>
 <body>
 <h2>Promoção Especial!</h2>
 <p>Confira os documentos e arquivos em anexo para mais detalhes.</p>
 <p>Esperamos você!</p>
 </body>
 </html>"""
-  body_html = st.text_area("Corpo do E-mail (HTML):", value=default_html, height=150)
+    body_html = st.text_area("Corpo do E-mail (HTML):", value=default_html, height=150)
 
-  submit_button = st.form_submit_button("🚀 Enviar E-mails")
+    submit_button = st.form_submit_button("🚀 Enviar E-mails")
 
 if submit_button:
-  if not sender_email or not sender_password or not excel_file:
-    st.error(
-        "Por favor, preencha o e-mail, a senha e envie a planilha de"
-        " destinatários."
-    )
-  else:
-    try:
-      with st.spinner("Processando e enviando e-mails..."):
-        # Ler o excel
-        df = pd.read_excel(excel_file)
+    if not sender_email or not sender_password or not excel_file:
+        st.error(
+            "Por favor, preencha o e-mail, a senha e envie a planilha de destinatários."
+        )
+    else:
+        try:
+            with st.spinner("Processando e enviando e-mails..."):
+                # Ler a planilha
+                df = pd.read_excel(excel_file)
 
-        if "Email" not in df.columns:
-          st.error("Erro: A planilha precisa possuir uma coluna chamada 'Email'.")
-        else:
-          recipients = df["Email"].dropna().tolist()
+                if "Email" not in df.columns:
+                    st.error("Erro: A planilha precisa possuir uma coluna chamada 'Email'.")
+                else:
+                    recipients = df["Email"].dropna().astype(str).str.strip().tolist()
 
-          # Ler os anexos
-          attachments_data = []
-          if attachment_files:
-            for file in attachment_files:
-              content = file.read()
-              filename = file.name or "arquivo"
-              attachments_data.append((content, filename))
+                    # Processar e armazenar os arquivos anexados
+                    attachments_data = []
+                    if attachment_files:
+                        for file in attachment_files:
+                            file.seek(0)  # Garante que a leitura inicie do começo do arquivo
+                            content = file.read()
+                            filename = file.name or "arquivo"
+                            attachments_data.append((content, filename))
 
-          # Conectar ao SMTP
-          server = smtplib.SMTP("smtp.gmail.com", 587)
-          server.starttls()
-          server.login(sender_email, sender_password)
+                    # Conectar ao servidor SMTP do Gmail
+                    server = smtplib.SMTP("smtp.gmail.com", 587)
+                    server.starttls()
+                    server.login(sender_email, sender_password)
 
-          enviados = 0
-          for recipient in recipients:
-            try:
-              msg = MIMEMultipart()
-              msg["From"] = sender_email
-              msg["To"] = recipient
-              msg["Subject"] = subject
+                    enviados = 0
+                    erros = 0
 
-              # Corpo do e-mail em HTML
-              msg.attach(MIMEText(body_html, "html", "utf-8"))
+                    for recipient in recipients:
+                        try:
+                            msg = MIMEMultipart()
+                            msg["From"] = sender_email
+                            msg["To"] = recipient
+                            msg["Subject"] = subject
 
-              # Anexar arquivos
-              for file_bytes, filename in attachments_data:
-                part = MIMEBase("application", "octet-stream")
-                part.set_payload(file_bytes)
-                encoders.encode_base64(part)
-                part.add_header(
-                    "Content-Disposition", f"attachment; filename= {filename}"
-                )
-                msg.attach(part)
+                            # Adiciona corpo em HTML
+                            msg.attach(MIMEText(body_html, "html", "utf-8"))
 
-              server.sendmail(sender_email, recipient, msg.as_string())
-              enviados += 1
-            except Exception:
-              pass
+                            # Adiciona os anexos
+                            for file_bytes, filename in attachments_data:
+                                part = MIMEBase("application", "octet-stream")
+                                part.set_payload(file_bytes)
+                                encoders.encode_base64(part)
+                                
+                                # Removido o espaço extra em filename="{filename}"
+                                part.add_header(
+                                    "Content-Disposition",
+                                    f'attachment; filename="{filename}"'
+                                )
+                                msg.attach(part)
 
-          server.quit()
+                            server.sendmail(sender_email, recipient, msg.as_string())
+                            enviados += 1
+                        except Exception as err:
+                            erros += 1
 
-          st.success(
-              f"✅ {enviados} de {len(recipients)} e-mails enviados com"
-              " sucesso!"
-          )
-    except Exception as e:
-      st.error(f"Erro ao processar: {str(e)}")
+                    server.quit()
+
+                    if enviados > 0:
+                        st.success(f"✅ {enviados} de {len(recipients)} e-mails enviados com sucesso!")
+                    if erros > 0:
+                        st.warning(f"⚠️ Houve falha no envio para {erros} destinatários.")
+
+        except smtplib.SMTPAuthenticationError:
+            st.error("Erro de Autenticação: Verifique se o e-mail e a Senha de Aplicativo estão corretos.")
+        except Exception as e:
+            st.error(f"Erro ao processar: {str(e)}")
