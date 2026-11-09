@@ -3,10 +3,11 @@ import pandas as pd
 import zipfile
 import os
 import tempfile
-import google.generativeai as genai
 import json
 import io
 import re
+from google import genai
+from google.genai import types
 
 st.set_page_config(page_title="Extrator de Variáveis de Artigos para Excel", layout="wide")
 
@@ -28,25 +29,17 @@ uploaded_zip = st.file_uploader("Envie o arquivo ZIP contendo os PDFs", type=["z
 
 
 def parse_json_safely(raw_text: str) -> dict:
-    """
-    Attempts to parse JSON strictly, with robust fallbacks for markdown fences 
-    or extra text returned by the LLM.
-    """
     cleaned = raw_text.strip()
-
-    # 1. Strip markdown code fences if present
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s*```$", "", cleaned)
         cleaned = cleaned.strip()
 
-    # 2. Try direct JSON loading
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         pass
 
-    # 3. Fallback: Find the outermost JSON object using regex
     match = re.search(r"\{.*\}", cleaned, re.DOTALL)
     if match:
         try:
@@ -58,12 +51,12 @@ def parse_json_safely(raw_text: str) -> dict:
 
 
 if uploaded_zip and api_key:
-    genai.configure(api_key=api_key)
+    # Inicializa o cliente oficial da nova API
+    client = genai.Client(api_key=api_key.strip())
 
     if st.button("🚀 Processar Artigos e Gerar Banco de Dados"):
         with st.spinner("Processando arquivos ZIP e extraindo dados com IA... Isso pode levar alguns minutos dependendo da quantidade de PDFs."):
 
-            # Criar diretório temporário para descompactar os arquivos
             with tempfile.TemporaryDirectory() as tmpdir:
                 zip_path = os.path.join(tmpdir, "uploaded.zip")
                 with open(zip_path, "wb") as f:
@@ -72,14 +65,12 @@ if uploaded_zip and api_key:
                 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                     zip_ref.extractall(tmpdir)
 
-                # Robust PDF extraction logic: filter out macOS metadata & hidden files
+                # Filtrar apenas PDFs válidos (ignorando arquivos temporários do macOS)
                 pdf_files = []
                 for root, dirs, files in os.walk(tmpdir):
-                    # Ignore __MACOSX directory tree
                     if "__MACOSX" in root.split(os.sep):
                         continue
                     for file in files:
-                        # Ignore system hidden files like ._filename.pdf or .DS_Store
                         if file.lower().endswith('.pdf') and not file.startswith('.'):
                             pdf_files.append(os.path.join(root, file))
 
@@ -91,20 +82,13 @@ if uploaded_zip and api_key:
                     extracted_data = []
                     progress_bar = st.progress(0)
 
-                    # Configure model to request structured JSON output
-                    generation_config = {
-                        "response_mime_type": "application/json"
-                    }
-
-                    model = genai.GenerativeModel('gemini-1.5-pro', generation_config=generation_config)
-
                     for i, pdf_path in enumerate(pdf_files):
-                        sample_file = None
+                        uploaded_file = None
                         file_name = os.path.basename(pdf_path)
 
                         try:
-                            # Fazer upload do PDF para a API do Gemini
-                            sample_file = genai.upload_file(pdf_path)
+                            # Faz o upload do PDF utilizando o novo cliente
+                            uploaded_file = client.files.upload(file=pdf_path)
 
                             prompt = """
                             Analise este artigo científico completo, incluindo textos, tabelas e imagens/figuras.
@@ -128,12 +112,16 @@ if uploaded_zip and api_key:
                             }
                             """
 
-                            response = model.generate_content([sample_file, prompt])
+                            response = client.models.generate_content(
+                                model='gemini-2.5-flash',
+                                contents=[uploaded_file, prompt],
+                                config=types.GenerateContentConfig(
+                                    response_mime_type="application/json"
+                                )
+                            )
 
-                            # Enhanced JSON Handling with error recovery
                             data = parse_json_safely(response.text)
 
-                            # Montar linha do DataFrame
                             row = {
                                 "DOI": data.get("doi", "Não encontrado"),
                                 "Nome do Artigo": data.get("article_name", file_name),
@@ -151,10 +139,10 @@ if uploaded_zip and api_key:
                             st.warning(f"Erro ao processar o arquivo {file_name}: {str(e)}")
 
                         finally:
-                            # Garante que o arquivo remoto no Gemini seja removido
-                            if sample_file:
+                            # Remove o arquivo temporário da nuvem da Google
+                            if uploaded_file:
                                 try:
-                                    genai.delete_file(sample_file.name)
+                                    client.files.delete(name=uploaded_file.name)
                                 except Exception:
                                     pass
 
@@ -167,14 +155,12 @@ if uploaded_zip and api_key:
                         st.subheader("📊 Prévia dos Dados Brutos Extraídos")
                         st.dataframe(df.head())
 
-                        # Filtrar variáveis que aparecem em pelo menos 30% dos artigos
                         total_articles = len(df)
                         threshold = 0.3 * total_articles
 
                         metadata_cols = ["DOI", "Nome do Artigo", "Autor"]
                         variable_cols = [col for col in df.columns if col not in metadata_cols]
 
-                        # Substitui strings vazias / nulas para contagem correta de presença
                         df_vars = df[variable_cols].replace(["Não encontrado", "N/A", "n/a", "", None], pd.NA)
 
                         valid_vars = []
@@ -190,7 +176,6 @@ if uploaded_zip and api_key:
                         st.write(f"De **{len(variable_cols)}** variáveis totais extraídas, **{len(valid_vars)}** atenderam ao critério de frequência (aparecem em 30% ou mais dos artigos) e foram mantidas. As demais foram descartadas.")
                         st.dataframe(df_filtered.head())
 
-                        # Gerar arquivo Excel para download
                         output = io.BytesIO()
                         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                             df_filtered.to_excel(writer, index=False, sheet_name='Banco de Dados')
