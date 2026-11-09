@@ -48,7 +48,7 @@ st.sidebar.header("Configuração dos modelos")
 ollama_url = st.sidebar.text_input(
     "Endereço do Ollama",
     value=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-    help="Local: http://localhost:11434. Na nuvem, use o endereço de um servidor Ollama acessível pela aplicação.",
+    help="OLLAMA_BASE_URL = "http://localhost:11434". Na nuvem, use o endereço de um servidor Ollama acessível pela aplicação.",
 ).strip().rstrip("/")
 
 chat_model = st.sidebar.text_input(
