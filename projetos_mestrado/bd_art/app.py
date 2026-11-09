@@ -131,11 +131,12 @@ if uploaded_zip and api_key:
 
                             # Modelo atualizado e suportado pelo SDK google-genai
                             response = client.models.generate_content(
-                                model="gemini-2.5-flash",
+                                model="gemini-3.8-flash",
                                 contents=[uploaded_file, prompt],
                                 config=types.GenerateContentConfig(
-                                    response_mime_type="application/json"
-                                ),
+                                response_mime_type="application/json"
+    ),
+),
                             )
 
                             data = parse_json_safely(response.text)
