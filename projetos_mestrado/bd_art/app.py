@@ -98,3 +98,10 @@ st.info(
     "PDFs precisam ter texto selecionável. A extração semântica e os embeddings "
     "são executados pelo Ollama, não por uma API generativa paga."
 )
+
+# ============================================================
+# DOCLING: OCR DESATIVADO, TABELAS ATIVAS
+# ============================================================
+@st.cache_resource(show_spinner="Inicializando Docling...")
+def load_docling_converter():
+    options = PdfPipelineOptions()
