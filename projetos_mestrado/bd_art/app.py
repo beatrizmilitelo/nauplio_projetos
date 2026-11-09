@@ -60,7 +60,7 @@ def parse_json_safely(raw_text: str) -> dict:
 
 
 if uploaded_zip and api_key:
-    # Inicializa o cliente oficial da nova API
+    # Inicializa o cliente oficial da biblioteca google-genai
     client = genai.Client(api_key=api_key.strip())
 
     if st.button("🚀 Processar Artigos e Gerar Banco de Dados"):
@@ -76,7 +76,7 @@ if uploaded_zip and api_key:
                 with zipfile.ZipFile(zip_path, "r") as zip_ref:
                     zip_ref.extractall(tmpdir)
 
-                # Filtrar apenas PDFs válidos (ignorando arquivos temporários do macOS)
+                # Filtrar apenas PDFs válidos (ignorando arquivos ocultos e do macOS)
                 pdf_files = []
                 for root, dirs, files in os.walk(tmpdir):
                     if "__MACOSX" in root.split(os.sep):
@@ -104,7 +104,7 @@ if uploaded_zip and api_key:
                         file_name = os.path.basename(pdf_path)
 
                         try:
-                            # Faz o upload do PDF utilizando o novo cliente
+                            # Faz o upload do PDF utilizando a API oficial
                             uploaded_file = client.files.upload(file=pdf_path)
 
                             prompt = """
@@ -129,8 +129,9 @@ if uploaded_zip and api_key:
                             }
                             """
 
+                            # Modelo atualizado e suportado pelo SDK google-genai
                             response = client.models.generate_content(
-                                model="gemini-1.5-flash",
+                                model="gemini-2.5-flash",
                                 contents=[uploaded_file, prompt],
                                 config=types.GenerateContentConfig(
                                     response_mime_type="application/json"
@@ -160,7 +161,7 @@ if uploaded_zip and api_key:
                             )
 
                         finally:
-                            # Remove o arquivo temporário da nuvem da Google
+                            # Garante a eliminação do ficheiro temporário na nuvem
                             if uploaded_file:
                                 try:
                                     client.files.delete(name=uploaded_file.name)
