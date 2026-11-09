@@ -2,4 +2,3 @@ streamlit
 pandas
 google-generativeai
 xlsxwriter
-```[cite: 1]
