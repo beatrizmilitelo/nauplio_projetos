@@ -3,7 +3,7 @@ import os
 import re
 import json
 import zipfile
-import tempfile 
+import tempfile
 import pandas as pd
 import requests
 import streamlit as st
@@ -11,6 +11,7 @@ import streamlit as st
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.datamodel.base_models import InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
+
 
 # ============================================================
 # CONFIGURAÇÃO DA INTERFACE
@@ -24,16 +25,17 @@ st.set_page_config(
 st.title("🌊 Náuplio Analytics | Extrator científico semântico")
 st.markdown(
     """
-Este sistema extrai a estrutura dos PDFs com **Docling**, utiliza o **Ollama** local para identificar 
-metadados (Título, Autores, DOI) e variáveis científicas sem um dicionário fixo, e consolida 
-tudo em uma planilha Excel.
+Este sistema extrai a estrutura dos PDFs com **Docling**, utiliza o **Ollama** local/remoto 
+para identificar metadados (Título, Autores, DOI) e variáveis científicas sem um dicionário fixo, 
+e consolida tudo em uma planilha Excel pronta para download.
 """
 )
 
+
 # ============================================================
-# CONFIGURAÇÃO DO OLLAMA
+# CONFIGURAÇÃO DO OLLAMA (Local ou Streamlit Cloud)
 # ============================================================
-st.sidebar.header("Configuração dos modelos")
+st.sidebar.header("⚙️ Configuração dos modelos")
 
 def get_setting(name, default):
     try:
@@ -44,25 +46,52 @@ def get_setting(name, default):
         pass
     return os.getenv(name, default)
 
+
 ollama_url = st.sidebar.text_input(
     "Endereço do Ollama",
     value=get_setting("OLLAMA_BASE_URL", "http://localhost:11434"),
+    help="No Streamlit Cloud, use uma URL pública (ex: Ngrok: https://xxxx.ngrok-free.app). Localmente: http://localhost:11434",
 ).strip().rstrip("/")
 
 chat_model = st.sidebar.text_input(
     "Modelo de linguagem",
     value=get_setting("OLLAMA_CHAT_MODEL", "qwen2.5:7b"),
+    help="Modelo do Ollama instalado (ex: qwen2.5:7b, llama3, mistral).",
 ).strip()
 
-st.info("PDFs precisam ter texto selecionável. A extração é processada localmente via Ollama.")
+similarity_threshold = st.sidebar.slider(
+    "Similaridade mínima para sugerir agrupamento",
+    min_value=0.70,
+    max_value=0.99,
+    value=0.90,
+    step=0.01,
+)
+
+review_threshold = st.sidebar.slider(
+    "Abaixo deste valor, manter como conceito separado",
+    min_value=0.40,
+    max_value=0.89,
+    value=0.78,
+    step=0.01,
+)
+
+if review_threshold >= similarity_threshold:
+    st.sidebar.warning("O limite de revisão deve ser menor que o limite de agrupamento.")
+
+st.info(
+    "ℹ️ **Dica para Streamlit Cloud:** Como o app está rodando na nuvem, você precisa "
+    "informar uma URL acessível publicamente no campo **Endereço do Ollama** (ex: via Ngrok) "
+    "ou hospedar o Ollama em um servidor remoto."
+)
+
 
 # ============================================================
-# INICIALIZAÇÃO DO DOCLING
+# DOCLING PIPELINE SETUP
 # ============================================================
 @st.cache_resource(show_spinner="Inicializando Docling...")
 def load_docling_converter():
     options = PdfPipelineOptions()
-    options.do_ocr = False  # Desativado para evitar dependências de OCR
+    options.do_ocr = False  # OCR desativado para otimização e evitar erro de permissão do RapidOCR
     options.do_table_structure = True
     return DocumentConverter(
         format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)}
@@ -70,13 +99,14 @@ def load_docling_converter():
 
 converter = load_docling_converter()
 
+
 # ============================================================
-# FUNÇÃO DE EXTRAÇÃO COM OLLAMA
+# EXTRAÇÃO VIA OLLAMA (LLM)
 # ============================================================
 def extract_metadata_and_variables(text_content, model_name, api_url):
     """
-    Envia o texto do artigo para o Ollama e solicita resposta em formato JSON contendo
-    Título, Autores, DOI e as variáveis encontradas.
+    Envia o texto do artigo para o Ollama e retorna JSON estrito
+    contendo Título, Autores, DOI e um dicionário de variáveis.
     """
     prompt = f"""
     Analise o texto acadêmico a seguir e extraia as seguintes informações em formato JSON estrito:
@@ -85,9 +115,9 @@ def extract_metadata_and_variables(text_content, model_name, api_url):
     3. "doi": Código DOI do artigo (se presente, caso contrário null).
     4. "variaveis": Um dicionário/objeto com as variáveis científicas, metodológicas ou conceituais identificadas no artigo e seus respectivos valores ou descrições (chave: nome da variável, valor: descrição/valor).
 
-    Exemplo de formato de resposta:
+    Exemplo de formato de resposta esperada:
     {{
-        "titulo": "Exemplo de Título",
+        "titulo": "Exemplo de Título Acadêmico",
         "autores": "Silva A., Souza B.",
         "doi": "10.1016/j.example.2023.01.001",
         "variaveis": {{
@@ -97,7 +127,7 @@ def extract_metadata_and_variables(text_content, model_name, api_url):
         }}
     }}
 
-    Texto do artigo (primeiros trechos):
+    Texto do artigo (primeiros caracteres):
     {text_content[:8000]}
     """
 
@@ -106,30 +136,45 @@ def extract_metadata_and_variables(text_content, model_name, api_url):
         "prompt": prompt,
         "format": "json",
         "stream": False,
+        "options": {
+            "temperature": 0.1
+        }
     }
 
     try:
-        response = requests.post(f"{api_url}/api/generate", json=payload, timeout=120)
+        url = f"{api_url}/api/generate"
+        response = requests.post(url, json=payload, timeout=300)
         response.raise_for_status()
         res_json = response.json()
-        return json.loads(res_json.get("response", "{}"))
-    except Exception as e:
-        st.error(f"Erro na comunicação com Ollama: {e}")
+        
+        raw_output = res_json.get("response", "{}")
+        return json.loads(raw_output)
+
+    except requests.exceptions.ConnectionError:
+        st.error(
+            f"❌ **Erro de Conexão com Ollama** em `{api_url}`.\n\n"
+            "Se o app está no Streamlit Cloud, certifique-se de que a URL no menu lateral é "
+            "uma URL pública ativa (ex: `https://xxxx.ngrok-free.app`) e não `localhost`."
+        )
         return {"titulo": None, "autores": None, "doi": None, "variaveis": {}}
+    except Exception as e:
+        st.error(f"⚠️ Erro ao processar resposta do Ollama: {e}")
+        return {"titulo": None, "autores": None, "doi": None, "variaveis": {}}
+
 
 # ============================================================
 # CARREGAMENTO E PROCESSAMENTO DO ARQUIVO ZIP
 # ============================================================
-st.header("📁 Processamento em Lote (.zip)")
+st.header("📁 Upload do Arquivo ZIP contendo os PDFs")
 
 uploaded_zip = st.file_uploader(
-    "Carregue um arquivo ZIP contendo os PDFs",
+    "Carregue um arquivo .zip com os PDFs dos artigos",
     type=["zip"],
-    help="O arquivo .zip deve conter os artigos acadêmicos em formato PDF."
+    help="O arquivo .zip deve conter os PDFs a serem processados."
 )
 
 if uploaded_zip is not None:
-    # 1. Leitura do arquivo ZIP
+    # Descompacta PDFs em memória
     pdf_files = []
     with zipfile.ZipFile(uploaded_zip, "r") as z:
         for filename in z.namelist():
@@ -139,7 +184,7 @@ if uploaded_zip is not None:
                 pdf_io.name = os.path.basename(filename)
                 pdf_files.append(pdf_io)
 
-    st.success(f"Encontrados **{len(pdf_files)}** arquivos PDF.")
+    st.success(f"Encontrados **{len(pdf_files)}** arquivos PDF no arquivo ZIP.")
 
     if st.button("🚀 Iniciar Extração Semântica", type="primary"):
         all_records = []
@@ -147,24 +192,24 @@ if uploaded_zip is not None:
         status_text = st.empty()
 
         for idx, pdf_file in enumerate(pdf_files):
-            status_text.text(f"Processando arquivo ({idx+1}/{len(pdf_files)}): {pdf_file.name}...")
+            status_text.text(f"Processando ({idx + 1}/{len(pdf_files)}): {pdf_file.name}...")
             
-            # Salva temporariamente em memória/disco para leitura pelo Docling
+            # Escreve arquivo temporário para leitura do Docling
             with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
                 tmp.write(pdf_file.getvalue())
                 tmp_path = tmp.name
 
             try:
-                # 2. Convertendo PDF com Docling
+                # 1. Extração de texto com Docling
                 conversion_result = converter.convert(tmp_path)
                 markdown_text = conversion_result.document.export_to_markdown()
 
-                # 3. Extraindo informações via Ollama
+                # 2. Extração semântica via Ollama
                 extracted_data = extract_metadata_and_variables(
                     markdown_text, chat_model, ollama_url
                 )
 
-                # 4. Montagem da linha do DataFrame
+                # 3. Montagem da linha de registro
                 row = {
                     "Arquivo PDF": pdf_file.name,
                     "Título": extracted_data.get("titulo", "N/A"),
@@ -172,7 +217,7 @@ if uploaded_zip is not None:
                     "DOI": extracted_data.get("doi", "N/A"),
                 }
 
-                # Adiciona cada variável identificada como uma coluna
+                # Expande dicionário de variáveis como colunas individuais
                 variables = extracted_data.get("variaveis", {})
                 if isinstance(variables, dict):
                     for var_name, var_value in variables.items():
@@ -188,13 +233,13 @@ if uploaded_zip is not None:
 
             progress_bar.progress((idx + 1) / len(pdf_files))
 
-        status_text.text("Processamento concluído!")
+        status_text.text("✨ Processamento concluído com sucesso!")
 
-        # 5. Geração do DataFrame e Botão de Exportação para Excel
+        # 4. Exibição e exportação da planilha Excel
         if all_records:
             df_result = pd.DataFrame(all_records)
             
-            # Reorganiza colunas fixas no início
+            # Ordena colunas base no início da planilha
             fixed_cols = ["Arquivo PDF", "Título", "Autores", "DOI"]
             other_cols = [c for c in df_result.columns if c not in fixed_cols]
             df_result = df_result[fixed_cols + other_cols]
@@ -202,7 +247,7 @@ if uploaded_zip is not None:
             st.subheader("📊 Tabela Extraída")
             st.dataframe(df_result, use_container_width=True)
 
-            # Conversão para buffer Excel
+            # Gravação da planilha em memória
             excel_buffer = io.BytesIO()
             with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
                 df_result.to_excel(writer, index=False, sheet_name="Artigos_Extraidos")
