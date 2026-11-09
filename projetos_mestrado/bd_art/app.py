@@ -94,3 +94,7 @@ if review_threshold >= similarity_threshold:
     st.sidebar.warning("O limite de revisão deve ser menor que o limite de agrupamento.")
 
 st.info(
+    "O OCR está desativado para evitar o erro de permissão do RapidOCR. "
+    "PDFs precisam ter texto selecionável. A extração semântica e os embeddings "
+    "são executados pelo Ollama, não por uma API generativa paga."
+)
