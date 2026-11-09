@@ -40,39 +40,46 @@ if uploaded_zip and api_key:
                 with zipfile.ZipFile(zip_path, 'r') as zip_ref:
                     zip_ref.extractall(tmpdir)
                 
-                # Listar todos os PDFs extraídos
+                # Listar todos os PDFs extraídos (ignorando arquivos ocultos de sistema como __MACOSX)
                 pdf_files = []
                 for root, dirs, files in os.walk(tmpdir):
+                    if "__MACOSX" in root:
+                        continue
                     for file in files:
-                        if file.lower().endswith('.pdf'):
+                        if file.lower().endswith('.pdf') and not file.startswith('._'):
                             pdf_files.append(os.path.join(root, file))
                 
                 if not pdf_files:
-                    st.error("Nenhum arquivo PDF encontrado dentro do arquivo ZIP.")
+                    st.error("Nenhum arquivo PDF válido foi encontrado dentro do arquivo ZIP.")
                 else:
                     st.info(f"Encontrados {len(pdf_files)} arquivos PDF. Iniciando extração inteligente...")
                     
                     extracted_data = []
                     progress_bar = st.progress(0)
                     
-                    # Usando o modelo Gemini 1.5 Pro para análise multimodal (texto, tabelas e imagens)
-                    model = genai.GenerativeModel('gemini-1.5-pro')
+                    # Configuração para forçar a API a responder em formato JSON estrito
+                    generation_config = {
+                        "response_mime_type": "application/json"
+                    }
+                    
+                    model = genai.GenerativeModel('gemini-1.5-pro', generation_config=generation_config)
                     
                     for i, pdf_path in enumerate(pdf_files):
+                        sample_file = None
                         try:
                             # Fazer upload do PDF para a API do Gemini
                             sample_file = genai.upload_file(pdf_path)
                             
                             prompt = """
                             Analise este artigo científico completo, incluindo textos, tabelas e imagens/figuras.
-                            Extraia as seguintes informações e retorne estritamente em formato JSON puro:
+                            Extraia as seguintes informações e retorne estritamente em formato JSON:
                             
                             1. "doi": O DOI do artigo (string ou "Não encontrado").
                             2. "article_name": O título completo do artigo.
                             3. "authors": Os autores principais do artigo.
                             4. "variables": Um dicionário contendo TODAS as variáveis medidas, coletadas, analisadas ou citadas no estudo (ex: latitude, longitude, comprimento máximo, nível trófico, temperatura, salinidade, etc.), junto com seus respectivos valores ou menções encontradas. As chaves devem ser o nome padronizado da variável (em minúsculas e sem acentos complexos, ex: "latitude", "longitude", "comprimento_maximo") e o valor deve ser o dado extraído ou "Presente".
                             
-                            Retorne APENAS o JSON no seguinte formato estruturado:
+                            Formato esperado:
                             {
                               "doi": "...",
                               "article_name": "...",
@@ -87,14 +94,8 @@ if uploaded_zip and api_key:
                             
                             response = model.generate_content([sample_file, prompt])
                             
-                            # Limpeza e conversão do texto da resposta para JSON
-                            text_resp = response.text.strip()
-                            if text_resp.startswith("```json"):
-                                text_resp = text_resp[7:]
-                            if text_resp.endswith("```"):
-                                text_resp = text_resp[:-3]
-                                
-                            data = json.loads(text_resp.strip())
+                            # Parse direto do JSON (garantido pelo response_mime_type)
+                            data = json.loads(response.text.strip())
                             
                             # Montar linha do DataFrame
                             row = {
@@ -106,15 +107,20 @@ if uploaded_zip and api_key:
                             vars_dict = data.get("variables", {})
                             if isinstance(vars_dict, dict):
                                 for k, v in vars_dict.items():
-                                    row[k.strip().lower()] = v
+                                    row[str(k).strip().lower()] = v
                                     
                             extracted_data.append(row)
                             
-                            # Deletar arquivo remoto temporário do Google
-                            genai.delete_file(sample_file.name)
-                            
                         except Exception as e:
                             st.warning(f"Erro ao processar o arquivo {os.path.basename(pdf_path)}: {str(e)}")
+                            
+                        finally:
+                            # Garante a eliminação do ficheiro temporário na cloud, mesmo que ocorra um erro
+                            if sample_file:
+                                try:
+                                    genai.delete_file(sample_file.name)
+                                except Exception:
+                                    pass
                         
                         progress_bar.progress((i + 1) / len(pdf_files))
                     
@@ -132,9 +138,12 @@ if uploaded_zip and api_key:
                         metadata_cols = ["DOI", "Nome do Artigo", "Autor"]
                         variable_cols = [col for col in df.columns if col not in metadata_cols]
                         
+                        # Normalizar valores ausentes/inválidos para um cálculo exato de ocorrência
+                        df_vars = df[variable_cols].replace(["Não encontrado", "N/A", "n/a", "", None], pd.NA)
+                        
                         valid_vars = []
                         for col in variable_cols:
-                            non_null_count = df[col].notna().sum()
+                            non_null_count = df_vars[col].notna().sum()
                             if non_null_count >= threshold:
                                 valid_vars.append(col)
                                 
@@ -159,5 +168,6 @@ if uploaded_zip and api_key:
                         )
                     else:
                         st.error("Nenhum dado pôde ser extraído dos arquivos PDF.")
+
 elif uploaded_zip and not api_key:
     st.warning("⚠️ Por favor, insira sua Chave de API do Google Gemini na barra lateral para continuar.")
