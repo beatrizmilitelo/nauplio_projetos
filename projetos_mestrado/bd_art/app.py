@@ -98,6 +98,39 @@ st.info(
     "PDFs precisam ter texto selecionável. A extração semântica e os embeddings "
     "são executados pelo Ollama, não por uma API generativa paga."
 )
+# ============================================================
+# CARREGAMENTO DE ARQUIVOS (PDFs Individuais ou ZIP)
+# ============================================================
+st.header("📁 Entrada de Dados")
+
+uploaded_zip = st.file_uploader(
+    "Carregue um arquivo ZIP contendo os PDFs científicos",
+    type=["zip"],
+    help="Envie um arquivo .zip compactado contendo todos os artigos em formato PDF."
+)
+
+pdf_files = []
+
+if uploaded_zip is not None:
+    # Manipulação do arquivo ZIP em memória
+    with zipfile.ZipFile(uploaded_zip, "r") as z:
+        for filename in z.namelist():
+            # Filtra apenas arquivos .pdf e ignora arquivos ocultos/pastas
+            if filename.lower().endswith(".pdf") and not filename.startswith("__MACOSX"):
+                pdf_data = z.read(filename)
+                # Cria um objeto em memória simulando um arquivo enviado
+                pdf_io = io.BytesIO(pdf_data)
+                pdf_io.name = os.path.basename(filename)
+                pdf_files.append(pdf_io)
+                
+    st.success(f"Encontrados **{len(pdf_files)}** arquivos PDF no arquivo ZIP.")
+
+# Exemplo de uso: processando a lista extraída do ZIP
+if pdf_files:
+    st.subheader("Arquivos prontos para extração:")
+    for pdf in pdf_files:
+        st.write(f"- 📄 `{pdf.name}`")
+
 
 # ============================================================
 # DOCLING: OCR DESATIVADO, TABELAS ATIVAS
