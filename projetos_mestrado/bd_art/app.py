@@ -45,21 +45,33 @@ prova automática de equivalência científica.
 # CONFIGURAÇÃO DO OLLAMA
 # ============================================================
 st.sidebar.header("Configuração dos modelos")
+# No Streamlit Cloud, configure OLLAMA_BASE_URL em Settings > Secrets.
+# Localmente, a variável de ambiente ou o endereço padrão pode ser utilizado.
+def get_setting(name, default):
+    try:
+        secret_value = st.secrets.get(name)
+        if secret_value:
+            return str(secret_value)
+    except Exception:
+        pass
+    return os.getenv(name, default)
+
+
 ollama_url = st.sidebar.text_input(
     "Endereço do Ollama",
-    value=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-    help="OLLAMA_BASE_URL = "http://localhost:11434". Na nuvem, use o endereço de um servidor Ollama acessível pela aplicação.",
+    value=get_setting("OLLAMA_BASE_URL", "http://localhost:11434"),
+    help="Local: http://localhost:11434. No Streamlit Cloud, configure OLLAMA_BASE_URL em Settings > Secrets com o endereço HTTPS do servidor Ollama.",
 ).strip().rstrip("/")
 
 chat_model = st.sidebar.text_input(
     "Modelo de linguagem",
-    value=os.getenv("OLLAMA_CHAT_MODEL", "qwen2.5:7b"),
+    value=get_setting("OLLAMA_CHAT_MODEL", "qwen2.5:7b"),
     help="Exemplo: qwen2.5:7b. Baixe o modelo no Ollama antes de executar.",
 ).strip()
 
 embedding_model = st.sidebar.text_input(
     "Modelo de embeddings",
-    value=os.getenv("OLLAMA_EMBED_MODEL", "bge-m3"),
+    value=get_setting("OLLAMA_EMBED_MODEL", "bge-m3"),
     help="Exemplo: bge-m3, modelo multilíngue para gerar vetores de texto.",
 ).strip()
 
@@ -82,15 +94,3 @@ if review_threshold >= similarity_threshold:
     st.sidebar.warning("O limite de revisão deve ser menor que o limite de agrupamento.")
 
 st.info(
-    "O OCR está desativado para evitar o erro de permissão do RapidOCR. "
-    "PDFs precisam ter texto selecionável. A extração semântica e os embeddings "
-    "são executados pelo Ollama, não por uma API generativa paga."
-)
-
-
-# ============================================================
-# DOCLING: OCR DESATIVADO, TABELAS ATIVAS
-# ============================================================
-@st.cache_resource(show_spinner="Inicializando Docling...")
-def load_docling_converter():
-    options = PdfPipelineOptions()
